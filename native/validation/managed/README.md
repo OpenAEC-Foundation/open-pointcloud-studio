@@ -13,7 +13,12 @@ the 1,000-point grid to 500, collects the exported coordinates after the job
 completes, then undoes the edit and saves again to the same output path. It
 checks both coordinate sets and the bytes of the original input. The
 `staged_version_points` array in `result.json` records the completed jobs.
-The platform must separately verify publication of new versions in Docs.
+The probe then delivers both versions in succession at the same mounted path,
+beside the still-open original of the same name. For each version it selects
+the reopened layer by path, saves it through MCP to a third file, compares
+every coordinate, and removes the layer before replacing its mounted file.
+`reopened_version_points` records the read-back counts. Publishing those
+versions from the deployed Docs host is a separate acceptance step.
 
 `result-2026-11-05.json` records a successful local amd64 Linux run with labwc
 0.7.1 and the development binary. Idle RSS was measured after the empty window

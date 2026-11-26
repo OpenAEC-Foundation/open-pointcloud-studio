@@ -96,6 +96,22 @@ def xyz_coordinates(path):
     return set(rows)
 
 
+def reopen_version(path, source, readback, expected):
+    tool("open", path=str(path))
+    idle = tool("wait_until_idle", timeout_seconds=60)
+    assert idle["idle"], idle
+    layers = tool("stand")["result"]["clouds"]
+    assert len(layers) == 2 and {layer["path"] for layer in layers} == {str(source), str(path)}, layers
+    layer = next(layer for layer in layers if layer["path"] == str(path))
+    assert layer["points"] == layer["remaining"] == len(expected), layer
+    tool("set_active", index=layer["index"])
+    count = save_to(readback, len(expected))
+    assert xyz_coordinates(readback) == expected
+    tool("remove", index=layer["index"])
+    assert [layer["path"] for layer in tool("stand")["result"]["clouds"]] == [str(source)]
+    return count
+
+
 with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
     directory = Path(directory)
     work = directory / "files"
@@ -138,6 +154,7 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
             idle_rss_kib = None
             open_save_points = 0
             staged_points = []
+            reopened_points = []
             if args.paused_access:
                 blocked = rpc("tools/call", {"name": "pointcloud_stand", "arguments": {}})
                 assert blocked.get("isError") and "paused" in str(blocked), blocked
@@ -165,11 +182,20 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
                 tool("thin", percent=50)
                 tool("wait_until_idle", timeout_seconds=60)
                 staged_points.append(save_to(staged, 500))
+                edited_bytes = staged.read_bytes()
                 edited = xyz_coordinates(staged)
                 assert len(edited) == 500 and edited < original
                 tool("undo_delete")
                 staged_points.append(save_to(staged, 1000))
                 assert xyz_coordinates(staged) == original
+                # Deliver successive versions at one working path while the
+                # original layer with the same basename stays in the window.
+                mounted = work / "docs" / source.name
+                mounted.parent.mkdir()
+                for version, expected in [(edited_bytes, edited), (staged.read_bytes(), original)]:
+                    mounted.write_bytes(version)
+                    reopened_points.append(reopen_version(mounted, source, work / "readback.xyz", expected))
+                    assert mounted.read_bytes() == version
                 assert source.read_bytes() == source_bytes
                 tool("screenshot", path=str((args.output / "managed-window.png").resolve()), window=True)
                 assert (args.output / "managed-window.png").stat().st_size > 1000
@@ -179,7 +205,8 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
             assert window.wait(timeout=30) == 0
             assert request("GET", "/gezond")[0] == 503
             report = {"ok": True, "server": initialized["serverInfo"], "tool_count": len(definitions),
-                      "open_save_points": open_save_points, "staged_version_points": staged_points, "mcp_paused": args.paused_access, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
+                      "open_save_points": open_save_points, "staged_version_points": staged_points,
+                      "reopened_version_points": reopened_points, "mcp_paused": args.paused_access, "idle_rss_kib": idle_rss_kib, "unauthenticated_status": 401, "origin_status": 403,
                       "health_after_window_exit": 503, "sigterm_exit": 0}
             (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report))
