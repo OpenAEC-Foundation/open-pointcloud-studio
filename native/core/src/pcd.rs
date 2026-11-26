@@ -257,6 +257,14 @@ pub fn read(
             }
         }
         "binary" => {
+            if let Some(bytes) = super::remaining_file_bytes(&mut reader)? {
+                let complete = bytes / record_size as u64;
+                if points > complete {
+                    return Err(LoadError::InvalidData(format!(
+                        "truncated binary PCD: header declares {points} points, but only {complete} complete {record_size}-byte records fit after the header"
+                    )));
+                }
+            }
             let mut record = vec![0u8; record_size];
             for _ in 0..points {
                 reader.read_exact(&mut record)?;
@@ -292,14 +300,20 @@ pub fn read(
 }
 
 fn read_compressed(
-    reader: &mut impl Read,
+    reader: &mut BufReader<File>,
     fields: &[Field],
     points: u64,
     viewpoint: Viewpoint,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut header = [0u8; 8];
-    reader.read_exact(&mut header)?;
+    reader.read_exact(&mut header).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            invalid("truncated binary_compressed PCD: expected an 8-byte size header")
+        } else {
+            error.into()
+        }
+    })?;
     let compressed_len = u32::from_le_bytes(header[..4].try_into().unwrap()) as usize;
     let uncompressed_len = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
     let points = usize::try_from(points).map_err(|_| invalid("PCD point count overflow"))?;
@@ -322,6 +336,13 @@ fn read_compressed(
     }
     if uncompressed_len != expected_len || compressed_len == 0 {
         return Err(invalid("PCD compressed payload has an invalid size"));
+    }
+    if let Some(available) = super::remaining_file_bytes(reader)? {
+        if available < compressed_len as u64 {
+            return Err(LoadError::InvalidData(format!(
+                "truncated binary_compressed PCD: expected {compressed_len} compressed bytes, found {available}"
+            )));
+        }
     }
     let mut output = tempfile::tempfile()?;
     {
@@ -683,6 +704,45 @@ mod tests {
         std::fs::write(&binary, bytes).unwrap();
         let cloud = super::super::open(&binary, 10).unwrap();
         assert_eq!(cloud.points[0].rgb, Some([0x11, 0x22, 0x33]));
+    }
+
+    #[test]
+    fn incomplete_binary_files_report_what_is_missing_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("incomplete.pcd");
+        let check = |mode: &str, records: u64, payload: &[u8], expected: &str| {
+            let mut bytes =
+                format!("FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS {records}\nDATA {mode}\n")
+                    .into_bytes();
+            bytes.extend_from_slice(payload);
+            std::fs::write(&path, bytes).unwrap();
+            let error = super::read(
+                &path,
+                &mut |_| panic!("visited a partial scan"),
+                &mut |_| {},
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        };
+        check(
+            "binary",
+            500_000_000,
+            &[0; 29],
+            "500000000 points, but only 2 complete 12-byte records",
+        );
+        check(
+            "binary_compressed",
+            1,
+            &[0; 5],
+            "expected an 8-byte size header",
+        );
+        // The length check must run before the decoder sees this partial literal run.
+        check(
+            "binary_compressed",
+            1,
+            &[13, 0, 0, 0, 12, 0, 0, 0, 11, 0, 0],
+            "expected 13 compressed bytes, found 3",
+        );
     }
 
     #[test]

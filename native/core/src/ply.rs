@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use rayon::prelude::*;
@@ -263,9 +263,7 @@ pub(super) fn read(
                     "PLY vertex record is too large".into(),
                 ));
             }
-            let metadata = reader.get_ref().metadata()?;
-            if metadata.is_file() && metadata.len() > 0 {
-                let payload_bytes = metadata.len().saturating_sub(reader.stream_position()?);
+            if let Some(payload_bytes) = super::remaining_file_bytes(&mut reader)? {
                 let max_vertices = payload_bytes / record_size as u64;
                 if (vertex_count as u64) > max_vertices {
                     return Err(LoadError::InvalidData(format!(
