@@ -1447,6 +1447,13 @@ pub(crate) fn copy_e57_images_scene<T: std::io::Read + Seek>(
     Ok(())
 }
 
+/// las 0.9.11 decodes a scaled integer angle to f32 degrees, then truncates
+/// degrees / 0.006 on write. Move one float step away from zero to keep the
+/// decoded value on the original side of the integer boundary.
+fn las_scan_angle_for_write(degrees: f32) -> f32 {
+    degrees.abs().next_up().copysign(degrees)
+}
+
 fn update_las_record(
     raw_point: &mut las::Point,
     original: Point,
@@ -1462,6 +1469,7 @@ fn update_las_record(
         transform.inverse(point.xyz[axis])?;
     }
     [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
+    raw_point.scan_angle = las_scan_angle_for_write(raw_point.scan_angle);
     if point.rgb != original.rgb {
         raw_point.color = point.rgb.map(|rgb| {
             las::Color::new(
@@ -3335,6 +3343,21 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!destination.exists());
+    }
+
+    #[test]
+    fn rewriting_preserves_every_encoded_las_scan_angle() {
+        use las::raw::point::ScanAngle;
+        for scaled in i16::MIN..=i16::MAX {
+            let degrees = f32::from(ScanAngle::Scaled(scaled));
+            let written = ScanAngle::from(las_scan_angle_for_write(degrees));
+            assert_eq!(i16::from(written), scaled);
+        }
+        for rank in i8::MIN..=i8::MAX {
+            let degrees = f32::from(ScanAngle::Rank(rank));
+            let written = ScanAngle::from(las_scan_angle_for_write(degrees));
+            assert_eq!(i8::from(written), rank);
+        }
     }
 
     #[test]
