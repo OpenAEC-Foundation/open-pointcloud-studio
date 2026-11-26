@@ -1015,6 +1015,19 @@ impl OctreeIndex {
         Ok(points)
     }
 
+    /// Count records in intersecting leaves without opening files. Return
+    /// None as soon as the leaves exceed the caller's read budget.
+    pub fn visible_leaf_candidates(
+        &self,
+        limit: u64,
+        mut visible: impl FnMut(Bounds) -> bool,
+    ) -> Option<u64> {
+        let mut count = 0;
+        let exceeded =
+            visit_visible_leaves(&self.root, &mut visible, &mut |_| {}, &mut count, limit);
+        (!exceeded).then_some(count)
+    }
+
     /// At deep zoom, read nearby leaves exactly and sample only points that
     /// project into the viewport. Return `None` when the candidate leaves are
     /// too large, allowing the caller to use the regular node-preview LOD.
@@ -1034,10 +1047,10 @@ impl OctreeIndex {
         }
         let mut leaves = Vec::new();
         let mut candidates = 0u64;
-        if collect_visible_leaves(
+        if visit_visible_leaves(
             &self.root,
             &mut visible_node,
-            &mut leaves,
+            &mut |leaf| leaves.push(leaf),
             &mut candidates,
             max_scan_points,
         ) {
@@ -1176,10 +1189,10 @@ fn visit_intersecting_node(
     Ok(())
 }
 
-fn collect_visible_leaves<'a>(
+fn visit_visible_leaves<'a>(
     node: &'a IndexedNode,
     visible: &mut impl FnMut(Bounds) -> bool,
-    leaves: &mut Vec<&'a IndexedNode>,
+    visit: &mut impl FnMut(&'a IndexedNode),
     candidates: &mut u64,
     max_scan_points: u64,
 ) -> bool {
@@ -1191,12 +1204,12 @@ fn collect_visible_leaves<'a>(
         if *candidates > max_scan_points {
             return true;
         }
-        leaves.push(node);
+        visit(node);
         return false;
     }
     node.children
         .iter()
-        .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
+        .any(|child| visit_visible_leaves(child, visible, visit, candidates, max_scan_points))
 }
 
 /// Recover exact PLY, E57, PCD, PTX or text-cloud metadata and a small preview from an
@@ -3277,6 +3290,11 @@ mod tests {
             (8.0..=12.0).contains(&record.point.xyz[0])
                 && (4.0..=8.0).contains(&record.point.xyz[1])
         };
+        let count = index.visible_leaf_candidates(512, overlaps).unwrap();
+        assert!((25..512).contains(&count));
+        assert_eq!(index.visible_leaf_candidates(count, overlaps), Some(count));
+        assert_eq!(index.visible_leaf_candidates(count - 1, overlaps), None);
+        assert_eq!(index.visible_leaf_candidates(0, |_| false), Some(0));
         let exact = index
             .sample_visible_indexed_cancellable(100, 512, overlaps, visible, || false)
             .unwrap()
