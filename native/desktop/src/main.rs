@@ -123,6 +123,7 @@ use ui_theme::UiTheme;
 pub(crate) const APP_NAME: &str = "Open Pointcloud Studio";
 /// Where the source code of the application is published.
 pub(crate) const SOURCE_URL: &str = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio";
+const SAMPLE_SCAN_URL: &str = "https://raw.githubusercontent.com/PointCloudLibrary/data/084fa0e260580cc765ded83de4ec3f495f1d6f1e/tutorials/room_scan1.pcd";
 /// The version as the status bar shows it.
 const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 /// The name window managers and launchers know the application by, which is
@@ -11709,6 +11710,25 @@ impl Studio {
             .width(Fill)
             .height(Fill)
         };
+        let canvas = if model_visible
+            && self.clouds.is_empty()
+            && self.imports.is_empty()
+            && !self.views.capturing()
+        {
+            canvas.push(
+                container(
+                    button(text(i18n::tr("Download sample room scan ↗")).size(13))
+                        .on_press(Message::OpenUrl(SAMPLE_SCAN_URL))
+                        .style(ui_style::link)
+                        .padding([4, 8]),
+                )
+                .center(Fill)
+                // The empty-view prompt is just above the centre of the canvas.
+                .padding(iced::Padding::default().top(36)),
+            )
+        } else {
+            canvas
+        };
         let canvas = if self.walk.is_some()
             && !photo_compare
             && !self.drawing_view.shown
@@ -14835,9 +14855,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         let Some(overall_bounds) = combined_bounds(self.clouds) else {
             frame.fill_text(canvas::Text {
                 content: if self.loading_status.is_some() {
-                    "Importing point cloud…"
+                    i18n::tr("Importing point cloud…")
                 } else {
-                    "Open a point cloud to begin"
+                    i18n::tr("Drop a scan here or choose Open")
                 }
                 .into(),
                 position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 - 14.0),
