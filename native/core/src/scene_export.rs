@@ -129,6 +129,17 @@ pub fn write_las_scene(
                 "merge destination must differ from every source".into(),
             ));
         }
+        let path = &source.cloud.path;
+        if crate::ops::is_las(path) {
+            let raw =
+                las::raw::Header::read_from(std::io::BufReader::new(std::fs::File::open(path)?))?;
+            if las::Builder::new(raw)?.point_format.extra_bytes != 0 {
+                return Err(LoadError::InvalidData(format!(
+                    "this LAS/LAZ scene merge would discard extra point dimensions from {}; export the scan separately to preserve them",
+                    path.display()
+                )));
+            }
+        }
         total = total
             .checked_add(source.cloud.total_points)
             .ok_or_else(|| LoadError::InvalidData("point count overflows".into()))?;
@@ -570,6 +581,45 @@ pub fn write_e57_scene(
 mod tests {
     use super::*;
     use crate::{photo_edits::PhotoEdits, FilePhoto, PhotoProjection, ScanImageFormat};
+
+    #[test]
+    fn normalized_las_scene_refuses_to_discard_extra_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let las = dir.path().join("survey.LAS");
+        let mut builder = las::Builder::from((1, 2));
+        builder.point_format.extra_bytes = 2;
+        let mut writer = las::Writer::from_path(&las, builder.into_header().unwrap()).unwrap();
+        writer
+            .write_point(las::Point {
+                x: 1.0,
+                extra_bytes: vec![1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        writer.close().unwrap();
+        let xyz = dir.path().join("second.xyz");
+        std::fs::write(&xyz, "2 3 4\n").unwrap();
+        let clouds = [xyz, las].map(|p| crate::open(p, 10).unwrap());
+        let sources = clouds.each_ref().map(|cloud| SceneSource {
+            cloud,
+            transform: SceneTransform::default(),
+        });
+        for (filename, compressed) in [("out.las", false), ("out.laz", true)] {
+            let out = dir.path().join(filename);
+            std::fs::write(&out, b"previous export").unwrap();
+            let error = write_las_scene(
+                &sources,
+                &out,
+                compressed,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("extra point dimensions"));
+            assert!(error.to_string().contains("survey.LAS"));
+            assert_eq!(std::fs::read(out).unwrap(), b"previous export");
+        }
+    }
 
     #[test]
     fn mixed_export_keeps_pcd_and_each_ptx_station_without_inventing_origins() {

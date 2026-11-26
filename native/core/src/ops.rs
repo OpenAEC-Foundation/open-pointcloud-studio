@@ -34,7 +34,7 @@ pub const POINT_FORMATS: &[&str] = &[
 pub const EXPORT_FORMATS: &[&str] = &["las", "laz", "e57", "ply", "xyz", "pts", "csv"];
 
 /// Whether `path` names a LAS or LAZ file, which opens from its header.
-fn is_las(path: &Path) -> bool {
+pub(super) fn is_las(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
