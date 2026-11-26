@@ -198,6 +198,9 @@ fn reencode_las_full(
             if read == 0 {
                 break;
             }
+            for point in &mut batch {
+                point.scan_angle = las_scan_angle_for_write(point.scan_angle);
+            }
             writer.write_points(&batch)?;
             count += read;
         }
@@ -3357,6 +3360,37 @@ mod tests {
             let degrees = f32::from(ScanAngle::Rank(rank));
             let written = ScanAngle::from(las_scan_angle_for_write(degrees));
             assert_eq!(i8::from(written), rank);
+        }
+    }
+
+    #[test]
+    fn full_las_laz_conversion_keeps_signed_scan_angles() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.las");
+        let mut builder = las::Builder::from((1, 4));
+        builder.point_format = las::point::Format::new(6).unwrap();
+        let mut writer = las::Writer::from_path(&source, builder.into_header().unwrap()).unwrap();
+        for sign in [1.0, -1.0] {
+            writer
+                .write_point(las::Point {
+                    x: sign,
+                    scan_angle: (sign * 12.097) as f32,
+                    gps_time: Some(0.0),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        writer.close().unwrap();
+        let mut input = source;
+        for format in [ExportFormat::Laz, ExportFormat::Las] {
+            let destination = dir.path().join(format!("converted.{}", format.extension()));
+            let cloud = crate::open_las_header(&input).unwrap();
+            export_full(&cloud, &destination, format).unwrap();
+            let mut reader = las::Reader::from_path(&destination).unwrap();
+            let angles: Vec<_> = reader.points().map(|p| p.unwrap().scan_angle).collect();
+            let expected = f32::from(las::raw::point::ScanAngle::Scaled(2016));
+            assert_eq!(angles, [expected, -expected]);
+            input = destination;
         }
     }
 
