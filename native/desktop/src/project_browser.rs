@@ -956,7 +956,7 @@ impl Studio {
         .spacing(1);
         let progress = self.layer_progress(entry);
         let mut notes: Vec<String> = progress.iter().map(|(note, _)| note.clone()).collect();
-        let selected = entry.selection.as_ref().map_or(0, |mask| mask.count);
+        let selected = entry.selected_count();
         if selected > 0 {
             notes.push(tr_args(
                 "{count} selected",

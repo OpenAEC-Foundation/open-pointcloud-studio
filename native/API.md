@@ -1507,6 +1507,11 @@ do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
 colouring lets go of the oldest edits. `remove` of any layer empties this
 history for every layer.
 
+When a selection overlaps an earlier deletion, the global and per-layer selected
+counts include only the points still present. Undoing a second deletion restores
+only the points hidden by that second edit. Clearing the selection also drops
+any selected ordinals currently hidden by a deletion.
+
 `translate` and `scale` are taken back with `reset_transform`, which puts
 the active layer back at the coordinates of its source; `reset_transform`
 itself is not taken back.
