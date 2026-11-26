@@ -1898,7 +1898,8 @@ fn a_highlighted_cylinder_is_drawn_along_its_scanned_part() {
 #[test]
 fn command_line_detects_the_faces_of_a_box_of_a_scan_file() {
     let directory = tempfile::tempdir().unwrap();
-    let source = write_room_xyz(directory.path());
+    let source = directory.path().join("open-pointcloud-room.xyz");
+    std::fs::rename(write_room_xyz(directory.path()), &source).unwrap();
     let arguments = |values: &[&str]| -> Vec<OsString> {
         values.iter().map(|value| OsString::from(*value)).collect()
     };
@@ -1990,7 +1991,8 @@ fn command_line_detects_the_faces_of_a_box_of_a_scan_file() {
                 assert!(text.contains("FILE_SCHEMA(('IFC4'));"));
                 assert_eq!(text.matches("=IFCBUILDINGELEMENTPROXY(").count(), 7);
                 assert_eq!(text.matches("=IFCEXTRUDEDAREASOLID(").count(), 1);
-                assert!(text.contains("'Source: room.xyz; Units: metres'"));
+                assert!(text.contains("'Source: open-pointcloud-room.xyz; Units: metres'"));
+                assert!(text.contains("IFCDOCUMENTREFERENCE('./open-pointcloud-room.xyz'"));
             }
         }
     }

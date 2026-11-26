@@ -956,6 +956,8 @@ The DXF and DWG files are in version R2013 with metres as their unit. They hold:
 
 Every entity of the detected faces takes its colour from its layer, so a layer can be recoloured, frozen or switched off at once. The vertices of a polyface mesh can be moved and the mesh can be exploded into 3D faces. The files hold no ACIS solids (`3DSOLID`) or NURBS surfaces: a CAD program that can turn a mesh into a surface or a solid does that from these meshes.
 
+To share the faces with their source points, put the exported IFC and the original anchor scan in the same folder. Keep the scan’s filename when moving or sending the pair. The IFC project links to that filename and stores the detected geometry separately.
+
 The IFC file is IFC4, written as a STEP file. It holds a project with one site, one building and one storey named *Scan*, and every face as an `IfcBuildingElementProxy` in that storey with the object type `Plane (floor)`, `Plane (ceiling)`, `Plane (wall)`, `Plane (sloped)` or `Cylinder`. The type of a face follows from its direction alone, so a table top is a floor; for that reason no face is written as a wall, slab or column. The geometry:
 
 - A flat face is an `IfcPolygonalFaceSet` with one face per connected part, its openings as inner loops.

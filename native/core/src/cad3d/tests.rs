@@ -392,7 +392,7 @@ fn the_model_as_ifc_is_valid_step_with_its_objects_relative_to_a_local_origin() 
     for at in [[0.0; 3], FAR] {
         let model = sample(at);
         let path = directory.path().join("model.ifc");
-        let bytes = write_model_ifc(&model, &path).unwrap();
+        let bytes = write_model_ifc(&model, &path, None).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(text.len() as u64, bytes);
         assert!(text.is_ascii());
@@ -500,7 +500,7 @@ fn a_shaft_seen_from_inside_is_its_scanned_surface_in_ifc() {
     }
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("shaft.ifc");
-    write_model_ifc(&model, &path).unwrap();
+    write_model_ifc(&model, &path, None).unwrap();
     let instances = check::read(&fs::read_to_string(&path).unwrap()).unwrap();
     let count = |name: &str| {
         instances
@@ -568,7 +568,7 @@ fn a_failed_export_leaves_the_destination_as_it_was() {
             let result = match extension {
                 "dxf" => write_model_cad(model, &path, DrawingFormat::Dxf),
                 "dwg" => write_model_cad(model, &path, DrawingFormat::Dwg),
-                _ => write_model_ifc(model, &path),
+                _ => write_model_ifc(model, &path, None),
             };
             assert!(matches!(result, Err(crate::LoadError::InvalidData(_))));
             assert_eq!(fs::read(&path).unwrap(), b"earlier export");
