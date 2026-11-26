@@ -43,7 +43,9 @@ Run `restart.py BINARY --output DIRECTORY` in a graphical desktop session to
 verify two independent processes using one temporary profile. It checks source reopening,
 layout and camera restoration, photo blend, and zero changed interior pixels.
 Add `--station-source /absolute/path/section.e57` to repeat with a real calibrated
-station panorama. The script requires Pillow and NumPy. On Windows it requests
+station panorama. Use `--photo-source /absolute/path/scan.e57 --recover-photo-window`
+to check the model camera after reopening a scan with an embedded spherical panorama.
+The script requires Pillow and NumPy. On Windows it requests
 a graceful close of the original main window with `WM_CLOSE`. On Linux and
 macOS it uses the managed SIGTERM handler.
 

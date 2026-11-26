@@ -21,17 +21,22 @@ parser.add_argument('--recover-photo-window',action='store_true',help='Tear off 
 parser.add_argument('--pointer-probe',type=Path,help='Optional isolated virtual pointer helper to click pane link controls')
 parser.add_argument('--sheets',action='store_true',help='Also show two distinct sheets with placed drawings and paper annotations')
 parser.add_argument('--drawings',action='store_true',help='Include independent plan/elevation panes and annotations')
-parser.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
+sources=parser.add_mutually_exclusive_group()
+sources.add_argument('--photo-source',type=Path,help='Real E57 with an embedded spherical panorama')
+sources.add_argument('--station-source',type=Path,help='Optional real E57 with station 0 photographs')
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args()
 if args.recover_photo_window and (args.drawings or args.sheets):
     parser.error('--recover-photo-window compares the two-pane model and photo layout')
+if args.photo_source and (args.drawings or args.sheets or args.linked):
+    parser.error('--photo-source uses the two-pane model and spherical photo probe')
 args.drawings=args.drawings or args.sheets
 output=args.output.resolve()
 output.mkdir(parents=True,exist_ok=True)
 binary=args.binary.resolve()
-source=args.station_source.resolve() if args.station_source else output/'fixture.xyz'
-if not args.station_source:
+external_source=args.station_source or args.photo_source
+source=external_source.resolve() if external_source else output/'fixture.xyz'
+if not external_source:
     source.write_text(''.join(f'{x/10} {y/10} {z/10} {x*25} {y*25} {z*25}\n'
                             for x in range(10) for y in range(10) for z in range(10)))
 source_hash=hashlib.sha256(source.read_bytes()).hexdigest()
@@ -163,7 +168,13 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
                 break
             assert time.monotonic()<deadline
             time.sleep(.1)
-        if not args.station_source:
+        photo_index=0
+        if args.photo_source:
+            photos=api('list_photos',layer=0)['photos']
+            spherical=[photo for photo in photos if photo['kind']=='spherical']
+            assert spherical, 'The source needs an embedded spherical panorama'
+            photo_index=spherical[0]['index']
+        elif not args.station_source:
             api('add_panorama',layer=0,path=str(photo),position=[0,0,2],name='Persistent panorama')
             if args.linked:
                 api('add_panorama',layer=0,path=str(second_photo),position=[.45,.45,.45],name='Linked panorama')
@@ -178,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='ops-layout-restart-') as directory:
         if args.station_source:
             api('open_panorama',index=0,station=0)
         else:
-            api('enter_photo',index=0)
+            api('enter_photo',index=photo_index)
         api('set_panorama',yaw=1.2,pitch=.15,field_of_view=1.1)
         if not args.station_source:
             api('photo_blend',value=.37)
