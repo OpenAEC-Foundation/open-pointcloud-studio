@@ -45,11 +45,17 @@ pub fn read(
             .all(Option::is_some)
             .then(|| axes.map(Option::unwrap));
         let mut transform = [[0.0f64; 4]; 4];
-        for row in &mut transform {
+        for (index, row) in transform.iter_mut().enumerate() {
             let line = next_line(&mut lines)?
                 .ok_or_else(|| LoadError::InvalidData("truncated PTX transform".into()))?;
             let values = parse_values(&line, 4)?;
             row.copy_from_slice(&values[..4]);
+            if !row.iter().all(|value| value.is_finite()) {
+                return Err(LoadError::InvalidData(format!(
+                    "non-finite PTX transform in scan {scan}, row {}",
+                    index + 1
+                )));
+            }
         }
         // PTX's scanner position is already registered. The reference producer writes a
         // row-vector matrix with translation in the last row; also accept the
@@ -195,6 +201,46 @@ pub(crate) mod tests {
             assert_eq!(station, expected, "ordinal {ordinal}");
         }
         assert!(cloud.station_pose(6).is_none());
+    }
+
+    #[test]
+    fn rejects_non_finite_registration_before_starting_the_affected_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registration.ptx");
+        let header = "1\n1\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n";
+        let matrix = "1 0 0 0\n0 1 0 0\n0 0 1 0\n0 0 0 1\n";
+        let first = format!("{header}{matrix}1 2 3 0.5\n");
+        for (index, replacement) in ["NaN 0 0 0", "0 1 0 inf", "0 0 -inf 0", "0 0 0 NaN"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut rows = matrix.lines().collect::<Vec<_>>();
+            rows[index] = replacement;
+            let second_matrix = rows.join("\n");
+            std::fs::write(
+                &path,
+                format!("{first}{header}{second_matrix}\n4 5 6 0.5\n"),
+            )
+            .unwrap();
+
+            let mut stations = 0;
+            let mut points = Vec::new();
+            let error = super::read(
+                &path,
+                &mut |p| {
+                    points.push(p.xyz);
+                    Ok(())
+                },
+                &mut |_| stations += 1,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(&format!(
+                "non-finite PTX transform in scan 2, row {}",
+                index + 1
+            )));
+            assert_eq!(stations, 1);
+            assert_eq!(points, [[1.0, 2.0, 3.0]]);
+        }
     }
 
     #[test]
