@@ -19,6 +19,7 @@ section its version and date.
 
 - Compare an exported mesh to its source scan with `--mesh-deviation` to see the mean, 95th percentile and maximum distance to its surface.
 - Station photos and panoramas in rewritten E57 files open in readers that check the size of each image section.
+- Zoomed-out indexed scans now finish loading all visible points when they fit the layer’s high-density display budget.
 
 ## 2026.48.0 - 2026-11-24
 

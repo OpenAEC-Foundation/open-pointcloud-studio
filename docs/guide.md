@@ -128,12 +128,11 @@ Drags continue when the pointer leaves the scene. Survey coordinates such as nat
 **Display** (*Weergave*) beneath the view cube opens a panel that sets how points are drawn. Its **CAMERA** row is described under [Looking around](#looking-around); below it are:
 
 - **COLOR**: **RGB**, **Elevation**, **Intensity** and **Class** choose the colours. A mode that no visible cloud has values for is dimmed; a cloud without stored colours or intensity is drawn in a neutral grey in that mode while another cloud has them.
-- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
-
-See [index storage](#index-storage) to estimate disk use or select another volume.
-
+- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 points. Drag the slider or type an exact count in the field beside it and press Enter. On a Windows virtual desktop with a slow or black viewport, try 50000 before opening the scan. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
 - **Eye-dome** switches eye-dome lighting on or off: a shading by depth that makes edges and relief visible. While it is on, Properties has its **Strength**, from 0 to 5.
 - **Scan positions** shows or hides the station markers.
+
+See [index storage](#index-storage) to estimate disk use or select another volume.
 
 The budget is a ceiling: a view that needs fewer points gets fewer. With the section box on, what the box shows stays within the budget as well, while the points of the view outside the box stay on the graphics card without being drawn, so that switching the box off shows them at once; up to about twice the budget is then held in memory and on the graphics card. See [Section box](#section-box).
 
