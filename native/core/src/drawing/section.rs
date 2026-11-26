@@ -6,6 +6,7 @@
 //! only the thinned points and the count grid, so their cost follows the
 //! slab and the drawing, not the size of the scans.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use super::slab::{collect_slab, slab_from_section, Slab, SlabCut, SlabOptions, S
 use super::{
     class_point_layer, drawing_info_text, source_point_layer, write_drawing_progress, Drawing2d,
     DrawingFormat, DrawingRequest, DrawingStats, PointColor, PointLayers, LAYER_POINTS,
-    LAYER_RGB_CONTRAST,
+    LAYER_RGB_CONTRAST, MAX_LAYER_NAME_CHARS,
 };
 use crate::region_source::{RegionFilter, RegionSource};
 use crate::{normalized_degrees, LoadError, OrientedBox};
@@ -231,6 +232,7 @@ struct PointLayerTable {
 impl PointLayerTable {
     fn new(sources: &[DrawingSource<'_>], by: PointLayers) -> Self {
         let mut named: Vec<(String, [u8; 3])> = Vec::with_capacity(sources.len());
+        let mut taken = HashSet::new();
         for (position, layer) in sources.iter().enumerate() {
             if sources.len() == 1 || by == PointLayers::Class {
                 named.push((LAYER_POINTS.into(), LAYER_RGB_CONTRAST));
@@ -238,14 +240,16 @@ impl PointLayerTable {
             }
             // Two scans of the same name keep layers of their own.
             let base = source_point_layer(layer.name);
-            let mut name = base.clone();
+            let mut name = base.trim_end().to_owned();
             let mut copy = 1;
-            while named
-                .iter()
-                .any(|(taken, _)| taken.to_uppercase() == name.to_uppercase())
-            {
+            while !taken.insert(name.to_uppercase()) {
                 copy += 1;
-                name = format!("{base}~{copy}");
+                let suffix = format!("~{copy}");
+                name = base
+                    .chars()
+                    .take(MAX_LAYER_NAME_CHARS - suffix.len())
+                    .collect();
+                name.push_str(&suffix);
             }
             named.push((name, POINT_LAYER_RGB[position % POINT_LAYER_RGB.len()]));
         }
@@ -1378,6 +1382,59 @@ mod tests {
         }];
         let (drawing, _) = draw(&sources, &by_class);
         assert_eq!(per_layer(&drawing), [(LAYER_POINTS.to_string(), each, 0)]);
+    }
+
+    #[test]
+    fn long_scan_names_keep_separate_point_layers_in_dxf_and_dwg() {
+        let prefix = format!("é{}", "a".repeat(241));
+        let names = [
+            format!("{prefix}~2"),
+            format!("{prefix}xy-a"),
+            format!("{prefix}xy-b"),
+        ];
+        let points = records(&[Point {
+            xyz: [1.0, 1.0, 1.05],
+            rgb: None,
+            intensity: None,
+            classification: None,
+        }]);
+        let sources: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| DrawingSource {
+                source: RegionSource::resident(
+                    &points,
+                    SourceTransform {
+                        offset: [i as f64, 0.0, 0.0],
+                        ..SourceTransform::default()
+                    },
+                ),
+                name,
+            })
+            .collect();
+        let request = DrawingRequest {
+            fill: false,
+            ..DrawingRequest::default()
+        };
+        let directory = tempfile::tempdir().unwrap();
+        for extension in ["dxf", "dwg"] {
+            let path = directory.path().join(format!("section.{extension}"));
+            export_section_drawing(
+                &sources,
+                PLAN_BOX,
+                &request,
+                &path,
+                &everything,
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+            let mut points = read_back(&path, request.units).points;
+            points.sort();
+            let mut expected =
+                ["~2", "xy", "~3"].map(|tail| (format!("{LAYER_POINTS}-{prefix}{tail}"), 1, 0));
+            expected.sort();
+            assert_eq!(points, expected, "{extension}");
+        }
     }
 
     #[test]
