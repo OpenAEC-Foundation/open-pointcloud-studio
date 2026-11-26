@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -422,6 +422,19 @@ impl SourceStamp {
             length: metadata.len(),
             modified: metadata.modified().ok(),
         })
+    }
+}
+
+/// Bytes after the buffered cursor when the source reports a usable file size.
+/// For streams and generated files with unknown size, readers check records as they go.
+fn remaining_file_bytes(reader: &mut BufReader<File>) -> std::io::Result<Option<u64>> {
+    let metadata = reader.get_ref().metadata()?;
+    if metadata.is_file() && metadata.len() > 0 {
+        Ok(Some(
+            metadata.len().saturating_sub(reader.stream_position()?),
+        ))
+    } else {
+        Ok(None)
     }
 }
 
