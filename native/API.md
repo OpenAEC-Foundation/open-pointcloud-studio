@@ -441,7 +441,10 @@ destination in a folder that exists, and its extension chooses the format:
   representation; a cylinder seen from inside is the triangulated scanned
   surface. The property set `OPS_ScanGeometry` holds the class, area,
   coverage and residuals of a face and the radius, length and arc of a
-  cylinder. Coordinates far from zero are placed as for `export_mesh`.
+  cylinder. For both planes and cylinders, `ResidualMean` is the signed mean
+  distance and `ResidualMeanAbs` is the mean absolute distance. These and
+  `ResidualRms`, `ResidualP95` and `ResidualMax` are lengths in metres.
+  Coordinates far from zero are placed as for `export_mesh`.
 
 The complete job has `operation` (`export_faces`), `path`, `format` (`json`,
 `obj`, `dxf`, `dwg` or `ifc`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
