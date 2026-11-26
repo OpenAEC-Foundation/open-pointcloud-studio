@@ -4,6 +4,12 @@ This is the record of issue [#33](https://github.com/OpenAEC-Foundation/open-poi
 
 The current verified stable release is [2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.48.0), published on 25 November 2026.
 
+## Published SDK compatibility, checked 26 November 2026
+
+A C11 program built with the published 2026.45.1 SDK ran unchanged with the 2026.48.0 library on Windows x64, macOS Intel and Apple silicon, and Linux amd64 and arm64. Each native runner verified both archive checksums, compiled the older SDK’s `examples/inspect.c` once and ran it with each release’s shared library. The program reported the loaded release version and ABI 1.0 in each run. Its executable SHA-256 stayed the same across the library swap.
+
+On both releases the program read 1,000 points, received `OPS_ERROR_LIMIT` for an oversized export, exported 500 points to LAZ and read all 500 back through the index. The [five-platform run](https://github.com/boazeggs/open-pointcloud-studio/actions/runs/45753235614) records the archive and executable hashes. The [test script](https://github.com/boazeggs/open-pointcloud-studio/blob/0d22a882856cf7bde9793095d530d18c1397ec20/scripts/check-published-sdk-client.py) includes the compiler commands and the runtime library names for each platform.
+
 ## Published evidence, checked 25 November 2026
 
 The release runners verified the downloaded Windows, macOS and Linux packages and SDK libraries. The Windows Authenticode checks passed for publisher Impertio Studio B.V. The macOS checks passed on Intel and Apple silicon for Developer ID team `7KFV4QY98M`. The Linux runner verified the OpenPGP signatures on the checksum manifest and both AppImages. It also pulled the attested API image with digest `sha256:ee66ea26689a1f71eeb891be00661f97fa3d7dcdc8f08d5087cdb7d8082f089d`. See the [published verification record](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/open-pointcloud-studio_2026.48.0_verification.md) and [release run](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/45540574535).
@@ -137,7 +143,7 @@ Evidence:
 - Local: `check-exports.sh` on the DLL built with the GNU target: "15 functions, as the header declares". `examples/inspect.c` built with `gcc` 15.2 (MinGW-w64) and `-std=c11 -Wall -Wextra -Wpedantic -Werror` gave no warning, and ran with exit code 0: `ops_pointcloud 2026.43.0, ABI 1.0: 1000 points read, 500 exported, 500 read through an index of 1 nodes`. The header passed `clang` 19 with `-Wconversion -Wsign-conversion -Werror`, and as C++17. `native/sdk/packaging/test-sdk-packaging.sh`: 32 ok.
 - Local, earlier on 25 October 2026 in the review of the library, on the same library source: the DLL for the `x86_64-pc-windows-msvc` target with the static runtime, the example built with `cl /W4 /WX` and run against a locally packed archive, and the Rust consumer built without `--locked` and run.
 - CI: CI `native`, steps *Test Rust workspace* (Linux, Windows, macOS) and *Check the core without default features* (Linux). SDK `linux` (amd64 and arm64): the soname, the exports, the C library baseline, the archive, and the example against the unpacked archive and linked statically; on amd64 also *Test the SDK packaging scripts* and *Build and run the Rust consumer*, and on `main` *Build the Rust consumer from the repository by its git address*. SDK `windows`: the static runtime, *Check the runtime dependencies*, the exports, the version details, the example with `cl.exe`, *Sign the DLL* and *Report the signatures*. SDK `macos` and `macos-x86_64`: universal, the oldest macOS, *Sign and notarize the library*, the exports, the example on both processor types. Release `verify-release`: the example against the published macOS archive on both processor types, and the attestations of the published Linux archives.
-- Open: the list of DLLs that "a build of this version loads" in [docs/library.md](library.md#windows) is checked against the first run of SDK `windows`.
+- The [Windows SDK job for 2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/45540574535/job/138957917529) ran `dumpbin /dependents` on the x64 DLL. It reported the four system dependencies listed in the [Windows library documentation](library.md#windows).
 
 ## Cloud API
 
