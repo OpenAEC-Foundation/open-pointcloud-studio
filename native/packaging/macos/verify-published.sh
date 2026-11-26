@@ -52,6 +52,7 @@ hdiutil attach -nobrowse -readonly -mountpoint "$scratch/image" "$dmg" > /dev/nu
 mounted=true
 app="$scratch/image/Open Pointcloud Studio.app"
 shown spctl --assess --type execute -vv "$app" > /dev/null || accepted=false
+shown bash "$script_dir/validate-ticket.sh" "$app" > /dev/null || accepted=false
 if [[ "$MACOS_SIGNED" == true && "$accepted" != true ]]; then
   failures+=("the release says the app is notarized, and spctl or the ticket does not agree")
 fi
