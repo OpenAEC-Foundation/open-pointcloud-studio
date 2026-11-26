@@ -263,6 +263,14 @@ pub(super) fn read(
                     "PLY vertex record is too large".into(),
                 ));
             }
+            if let Some(payload_bytes) = super::remaining_file_bytes(&mut reader)? {
+                let max_vertices = payload_bytes / record_size as u64;
+                if (vertex_count as u64) > max_vertices {
+                    return Err(LoadError::InvalidData(format!(
+                        "truncated binary PLY: header declares {vertex_count} vertices, but only {max_vertices} complete {record_size}-byte records fit after the header"
+                    )));
+                }
+            }
             let layout = BinaryLayout::new(&properties);
             let batch_points = (BINARY_BATCH_BYTES / record_size).clamp(1, MAX_BINARY_BATCH_POINTS);
             let mut batch = vec![0u8; batch_points * record_size];
@@ -393,6 +401,22 @@ mod tests {
             assert_eq!(cloud.points[0].xyz, [1.0, 2.0, 3.0]);
             assert_eq!(cloud.points[0].rgb, Some([10, 20, 30]));
         }
+    }
+
+    #[test]
+    fn truncated_binary_payload_is_rejected_before_visiting_points() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("incomplete.ply");
+        // Include one complete batch, a further vertex, and a partial record.
+        let mut bytes = b"ply\nformat binary_little_endian 1.0\nelement vertex 500000000\nproperty float x\nproperty float y\nproperty float z\nend_header\n".to_vec();
+        bytes.resize(bytes.len() + (65_536 + 1) * 12 + 5, 0);
+        std::fs::write(&path, bytes).unwrap();
+        let error = super::super::visit_points(&path, &mut |_| {
+            panic!("truncated scan reached the point visitor")
+        })
+        .unwrap_err();
+        assert!(matches!(error, super::LoadError::InvalidData(ref message)
+            if message.contains("500000000 vertices") && message.contains("65537 complete 12-byte records")));
     }
 
     #[test]
