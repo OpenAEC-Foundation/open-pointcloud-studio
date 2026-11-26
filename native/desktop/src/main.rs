@@ -2064,6 +2064,8 @@ enum Message {
     PhotoSplitFinished,
     CompareModel(view_tabs::CompareAction),
     Budget(u32),
+    EditBudget(String),
+    ApplyBudget,
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
     SectionMin(usize, f32),
@@ -2246,6 +2248,7 @@ struct Studio {
     /// Modifier keys held down, for range and toggle clicks in the project list.
     modifiers: iced::keyboard::Modifiers,
     budget: u32,
+    budget_input: Option<String>,
     filter_ground: bool,
     filter_vegetation: bool,
     filter_buildings: bool,
@@ -2993,6 +2996,7 @@ impl Default for Studio {
             memory_usage: memory_usage::MemoryUsage::default(),
             modifiers: iced::keyboard::Modifiers::default(),
             budget: settings.budget,
+            budget_input: None,
             // The four class groups no longer have switches; classes are
             // shown or hidden one by one in the project panel.
             filter_ground: true,
@@ -8983,7 +8987,22 @@ impl Studio {
                 return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
             Message::MemoryTick => self.memory_usage.refresh(),
+            Message::EditBudget(value) => self.budget_input = Some(value),
+            Message::ApplyBudget => {
+                if let Some(input) = self.budget_input.take() {
+                    if let Some(value) = input
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| (MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(value))
+                    {
+                        return self.update(Message::Budget(value));
+                    }
+                    self.status = i18n::tr("Enter a whole number from 1000 to 50000000.").into();
+                }
+            }
             Message::Budget(budget) => {
+                self.budget_input = None;
                 self.budget = budget;
                 self.revision += 1;
                 return Task::batch([self.schedule_detail(), self.queue_preferences_save()]);
@@ -10905,6 +10924,8 @@ impl Studio {
                 container::Style::default().background(ui_theme::colors(theme).border_subtle)
             })
         };
+        let current_budget = self.budget.to_string();
+        let budget_input = self.budget_input.as_deref().unwrap_or(&current_budget);
         let panel = column![
             text(i18n::tr("CAMERA")).size(10).font(fonts::MEDIUM),
             row![
@@ -10993,8 +11014,11 @@ impl Studio {
                     Message::Budget
                 )
                 .step(100_000_u32)
-                .width(130),
-                text(format!("{:.1}M", f64::from(self.budget) / 1_000_000.0)).size(11),
+                .width(Fill),
+                ui_style::text_input("", budget_input)
+                    .on_input(Message::EditBudget)
+                    .on_submit(Message::ApplyBudget)
+                    .width(74),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),
@@ -17101,6 +17125,28 @@ mod lod_transition_tests {
         ));
         assert!(studio.detail_pending);
         assert_eq!(studio.detail_urgent_revision, None);
+    }
+
+    #[test]
+    fn typing_a_point_budget_only_changes_the_view_on_a_valid_submission() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Budget(250_000));
+        let _ = studio.update(Message::EditBudget("50000".into()));
+        assert_eq!(studio.budget, 250_000);
+        let _ = studio.update(Message::ApplyBudget);
+        assert_eq!(studio.budget, 50_000);
+        assert!(studio.budget_input.is_none());
+
+        for input in ["", "499.5", "999", "50000001"] {
+            let _ = studio.update(Message::EditBudget(input.into()));
+            let _ = studio.update(Message::ApplyBudget);
+            assert_eq!(studio.budget, 50_000);
+            assert!(studio.budget_input.is_none());
+        }
+        let _ = studio.update(Message::EditBudget("80000".into()));
+        let _ = studio.update(Message::Budget(1_000_000));
+        let _ = studio.update(Message::ApplyBudget);
+        assert_eq!(studio.budget, 1_000_000);
     }
 
     #[test]
