@@ -80,6 +80,17 @@ A project file opens the scans it lists that exist beside it as E57, LAS, LAZ, P
 
 Folders and project files are read in the background, which keeps the window responsive on a network share. `open-pointcloud-studio --list-scans PATH [PATH ...]` prints the files that would be opened, one per line, without opening a window.
 
+### Open part of an online COPC survey
+
+With PDAL installed, you can use HTTP range requests to fetch a rectangle at full point density. PDAL writes a local LAZ file that you can open, measure and index in Studio. The server hosting the COPC file must support byte ranges. [PDAL COPC reader](https://pdal.io/en/stable/stages/readers.copc.html)
+
+```sh
+pdal translate https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz autzen-window.laz --reader=readers.copc --readers.copc.bounds="([637200,637300],[851150,851250])" --writers.las.forward=all --writers.las.extra_dims=all
+open-pointcloud-studio autzen-window.laz
+```
+
+The example selects a 100 × 100 ft rectangle from the public Autzen survey in Oregon. The four numbers are the minimum and maximum X, followed by the minimum and maximum Y, in the source coordinate system. All elevations are included. The selection contains 5,197 points. Use your survey’s URL, coordinate units and bounds for your own data. The writer options carry the source header settings and extra point dimensions into the local LAS/LAZ file. [PDAL LAS writer options](https://pdal.io/en/stable/stages/writers.las.html)
+
 ### What appears first
 
 - **LAS and LAZ** open from their header at once, with a sample of points taken from places spread through the file. When the points of such a file cannot be read, the scan is closed again with the reason in the status bar; one with an index kept from before stays open, from that index.
