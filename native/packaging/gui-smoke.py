@@ -225,6 +225,7 @@ def run(options, folder):
     grid = os.path.join(folder, "grid.ply")
     write_grid(grid)
     environment = dict(os.environ)
+    environment.pop("OPS_INDEX_DIR", None)
     environment["XDG_CONFIG_HOME"] = os.path.join(folder, "config")
     environment["XDG_CACHE_HOME"] = os.path.join(folder, "cache")
     screenshot = os.path.abspath(options.screenshot or os.path.join(folder, "screenshot.png"))
@@ -254,6 +255,7 @@ def run(options, folder):
                 ["open", "-n", "-a", options.open_with]
                 + ["--env", f"XDG_CONFIG_HOME={environment['XDG_CONFIG_HOME']}"]
                 + ["--env", f"XDG_CACHE_HOME={environment['XDG_CACHE_HOME']}"]
+                + ["--env", "OPS_INDEX_DIR="]
                 + [grid],
                 check=True,
             )

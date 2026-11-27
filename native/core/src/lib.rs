@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -19,9 +19,11 @@ mod e57_limits;
 mod e57_parallel;
 mod e57_points;
 mod e57_quick;
+mod e57_write;
 mod export;
 mod glb;
 pub mod grid2d;
+mod las_crs;
 pub mod local_fit;
 mod mesh_formats;
 mod mesh_photo;
@@ -99,9 +101,9 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
-    mesh_deviation, mesh_deviation_progress, mesh_topology, mesh_topology_by_position,
-    mesh_topology_progress, open_boundary_vertices, open_boundary_vertices_progress, MeshDeviation,
-    MeshTopology,
+    mesh_deviation, mesh_deviation_progress, mesh_source_deviation, mesh_topology,
+    mesh_topology_by_position, mesh_topology_progress, open_boundary_vertices,
+    open_boundary_vertices_progress, MeshDeviation, MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_texture::{
@@ -120,8 +122,8 @@ pub use obj_mesh::{
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
 pub use octree::{
-    disk_caches, set_disk_caches, IndexConfig, IndexProgress, IndexStage, IndexedNode,
-    IndexedPoint, OctreeIndex,
+    disk_caches, minimum_index_bytes, set_disk_caches, IndexConfig, IndexProgress, IndexStage,
+    IndexedNode, IndexedPoint, OctreeIndex,
 };
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
@@ -420,6 +422,19 @@ impl SourceStamp {
             length: metadata.len(),
             modified: metadata.modified().ok(),
         })
+    }
+}
+
+/// Bytes after the buffered cursor when the source reports a usable file size.
+/// For streams and generated files with unknown size, readers check records as they go.
+fn remaining_file_bytes(reader: &mut BufReader<File>) -> std::io::Result<Option<u64>> {
+    let metadata = reader.get_ref().metadata()?;
+    if metadata.is_file() && metadata.len() > 0 {
+        Ok(Some(
+            metadata.len().saturating_sub(reader.stream_position()?),
+        ))
+    } else {
+        Ok(None)
     }
 }
 
@@ -941,6 +956,7 @@ pub fn open_las_preview(
             "LAZ chunks of varying size cannot be sampled in place".into(),
         ));
     }
+    let format = *reader.header().point_format();
     for block in 0..blocks {
         let start = if blocks == 1 {
             0
@@ -952,7 +968,7 @@ pub fn open_las_preview(
             .min(count - start)
             .min(target - cloud.points.len() as u64);
         for (offset, point) in reader.read_points(length)?.into_iter().enumerate() {
-            cloud.points.push(convert_las_point(&point));
+            cloud.points.push(convert_las_point(&point, format));
             cloud.point_ordinals.push(if compressed && count > target {
                 u64::MAX
             } else {
@@ -992,7 +1008,7 @@ fn visit_points_with_poses(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "las" | "laz" => read_las(path, push),
+        "las" | "laz" => read_las(path, &mut |point, _overlap| push(point)),
         "ply" => ply::read(path, push),
         "obj" => mesh_points::read_obj(path, push),
         "off" => mesh_points::read_off(path, push),
@@ -1095,7 +1111,7 @@ impl Collector {
 
 fn read_las(
     path: &Path,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut reader = las::Reader::from_path(path)?;
     // The LAZ reader only uses its parallel decompressor for read_points_into;
@@ -1111,9 +1127,10 @@ fn read_las(
 
 fn read_las_batches(
     reader: &mut las::Reader,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
     batch_limit: usize,
 ) -> Result<(), LoadError> {
+    let format = *reader.header().point_format();
     let mut batch = Vec::with_capacity(batch_limit);
     loop {
         batch.clear();
@@ -1121,13 +1138,13 @@ fn read_las_batches(
             break;
         }
         for point in &batch {
-            push(convert_las_point(point))?;
+            push(convert_las_point(point, format), point.is_overlap)?;
         }
     }
     Ok(())
 }
 
-fn convert_las_point(point: &las::Point) -> Point {
+fn convert_las_point(point: &las::Point, format: las::point::Format) -> Point {
     let rgb = point.color.map(|color| {
         let channels = [color.red, color.green, color.blue];
         if channels.iter().all(|channel| *channel <= 255) {
@@ -1140,7 +1157,13 @@ fn convert_las_point(point: &las::Point) -> Point {
         xyz: [point.x, point.y, point.z],
         rgb,
         intensity: Some(point.intensity),
-        classification: Some(u8::from(point.classification)),
+        // las-rs exposes legacy class 12 as Unclassified plus an overlap flag.
+        // Extended records encode the class and the flag independently.
+        classification: Some(if !format.is_extended && point.is_overlap {
+            12
+        } else {
+            u8::from(point.classification)
+        }),
     }
 }
 
@@ -1810,7 +1833,7 @@ mod tests {
             let mut points = Vec::new();
             read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     points.push(point);
                     Ok(())
                 },
@@ -1828,7 +1851,7 @@ mod tests {
             let mut visited = Vec::new();
             let stopped = read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     visited.push(point.xyz[0]);
                     if visited.len() == 3 {
                         Err(LoadError::Cancelled)

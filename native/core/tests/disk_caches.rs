@@ -50,7 +50,8 @@ fn caches_off_read_and_write_nothing_under_the_cache_folder() {
     let cache_home = directory.path().join("cache");
     // Before anything else, so that every cache of this process lies here.
     std::env::set_var("XDG_CACHE_HOME", &cache_home);
-    let root = cache_home.join("open-pointcloud-studio/indexes");
+    let root = directory.path().join("survey indexes");
+    std::env::set_var("OPS_INDEX_DIR", &root);
     assert!(disk_caches(), "the caches are on by default");
 
     // Caches on: opening a large source keeps its preview, and the next
@@ -76,6 +77,23 @@ fn caches_off_read_and_write_nothing_under_the_cache_folder() {
     write_cloud(&third, 100_000, 50.0);
     let cloud = pointcloud_core::open(&third, 1).unwrap();
     let planted = OctreeIndex::build_cached(&cloud, IndexConfig::default()).unwrap();
+    let stored: u64 = files(&root)
+        .iter()
+        .filter(|(path, _)| {
+            path.extension().is_some_and(|ext| ext == "bin")
+                && path.file_stem().is_some_and(|stem| {
+                    stem.to_str()
+                        .and_then(|name| name.strip_prefix('r'))
+                        .is_some_and(|digits| digits.bytes().all(|b| (b'0'..=b'7').contains(&b)))
+                })
+        })
+        .map(|(_, (size, _))| *size)
+        .sum();
+    assert_eq!(
+        stored,
+        pointcloud_core::minimum_index_bytes(cloud.total_points)
+    );
+    assert!(!cache_home.exists());
     drop(planted);
     let from_cache = pointcloud_core::open(&third, 1_000_000).unwrap();
     assert!(

@@ -287,6 +287,11 @@ jobs:
             assets/*.deb
             assets/*.AppImage
             assets/*_linux-*.tar.gz
+      - name: Download the managed AppImage measurements
+        uses: actions/download-artifact@v4
+        with:
+          pattern: managed-linux-*
+          path: managed-reports
       - name: Write the release notes
         env:
           WINDOWS_SIGNED: ${{ needs.packages.outputs.windows_signed }}
@@ -299,6 +304,7 @@ jobs:
           LINUX_GPG_FINGERPRINT: ${{ vars.OPENAEC_GPG_FINGERPRINT }}
         run: |
           bash native/packaging/release-notes.sh "$NUMBER" > notes.md
+          python3 native/packaging/managed-memory-notes.py "$NUMBER" managed-reports >> notes.md
           {
             echo "### Attestations and image"
             echo
@@ -436,10 +442,22 @@ jobs:
           Expand-Archive "release\open-pointcloud-studio_$($env:NUMBER)_windows-x64.zip" $unpacked
           Expand-Archive "release\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll.zip" $unpacked
           $app = "$unpacked\open-pointcloud-studio_$($env:NUMBER)_windows-x64"
+          $setup = "release\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
+          $setupSignature = Get-AuthenticodeSignature $setup
+          if ($setupSignature.Status -ne 'Valid' -or -not $setupSignature.TimeStamperCertificate) {
+            throw 'The downloaded installer must have a valid timestamped signature before installation'
+          }
+          $target = Join-Path $env:RUNNER_TEMP 'verify-installed'
+          $process = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES',
+            '/NORESTART', '/CURRENTUSER', ('/DIR="{0}"' -f $target)) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
           $files = [ordered]@{
             'open-pointcloud-studio.exe' = @("$app\open-pointcloud-studio.exe", $env:WINDOWS_SIGNED)
             'OpenCADStudio.exe' = @("$app\OpenCADStudio.exe", $env:WINDOWS_SIGNED)
-            'the installer' = @("release\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe", $env:WINDOWS_SIGNED)
+            'the installer' = @($setup, $env:WINDOWS_SIGNED)
+            'installed open-pointcloud-studio.exe' = @("$target\open-pointcloud-studio.exe", $env:WINDOWS_SIGNED)
+            'installed OpenCADStudio.exe' = @("$target\OpenCADStudio.exe", $env:WINDOWS_SIGNED)
+            'installed unins000.exe' = @("$target\unins000.exe", $env:WINDOWS_SIGNED)
             'ops_pointcloud.dll' = @("$unpacked\open-pointcloud-studio-sdk_$($env:NUMBER)_windows-x64-dll\bin\ops_pointcloud.dll", $env:SDK_WINDOWS_SIGNED)
           }
           $lines = @('### Authenticode', '', '| File | Status | Signer | Thumbprint | Timestamp by |', '| --- | --- | --- | --- | --- |')
@@ -450,6 +468,7 @@ jobs:
             $lines += "| $name | $($signature.Status) | $($signature.SignerCertificate.Subject) | $($signature.SignerCertificate.Thumbprint) | $($signature.TimeStamperCertificate.Subject) |"
             if ($expected -eq 'true') {
               if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) { $failures += "$name is not validly signed with a timestamp" }
+              if ($signature.SignerCertificate.Subject -ne $setupSignature.SignerCertificate.Subject) { $failures += "$name has a different publisher from the installer" }
               "Authenticode of $name`: $($signature.SignerCertificate.Subject), thumbprint $($signature.SignerCertificate.Thumbprint)" | Add-Content $identities
             } elseif ($signature.Status -ne 'NotSigned') {
               $failures += "$name is $($signature.Status), and the release says it is not signed"

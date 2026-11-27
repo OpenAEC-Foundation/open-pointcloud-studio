@@ -45,6 +45,10 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile={#SourceDir}\LICENSE-GPL-3.0.txt
 SetupIconFile=..\assets\icons\icon.ico
+#ifdef SignRelease
+SignTool=OpenAEC
+SignedUninstaller=yes
+#endif
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 OutputDir={#OutputDir}

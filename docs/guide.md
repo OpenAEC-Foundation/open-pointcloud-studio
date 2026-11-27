@@ -128,9 +128,11 @@ Drags continue when the pointer leaves the scene. Survey coordinates such as nat
 **Display** (*Weergave*) beneath the view cube opens a panel that sets how points are drawn. Its **CAMERA** row is described under [Looking around](#looking-around); below it are:
 
 - **COLOR**: **RGB**, **Elevation**, **Intensity** and **Class** choose the colours. A mode that no visible cloud has values for is dimmed; a cloud without stored colours or intensity is drawn in a neutral grey in that mode while another cloud has them.
-- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
+- **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 points. Drag the slider or type an exact count in the field beside it and press Enter. On a Windows virtual desktop with a slow or black viewport, try 50000 before opening the scan. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
 - **Eye-dome** switches eye-dome lighting on or off: a shading by depth that makes edges and relief visible. While it is on, Properties has its **Strength**, from 0 to 5.
 - **Scan positions** shows or hides the station markers.
+
+See [index storage](#index-storage) to estimate disk use or select another volume.
 
 The budget is a ceiling: a view that needs fewer points gets fewer. With the section box on, what the box shows stays within the budget as well, while the points of the view outside the box stay on the graphics card without being drawn, so that switching the box off shows them at once; up to about twice the budget is then held in memory and on the graphics card. See [Section box](#section-box).
 
@@ -386,7 +388,7 @@ The common exports are direct entries of the File menu: **Export full resolution
 | **Section box…** | The points of the active scan inside the section box; available while the box is on |
 | **Section drawing…** | What the section box cuts as a 2D drawing in DXF or DWG, from every visible scan; available while the box is on. See [Section drawings](#section-drawings) |
 | **Every Nth point…** | One point of the active scan in 2, 5, 10, 20, 50 or 100, as set with **Keep 1 in** on the Export page or under **EXPORT** on the Workspace page |
-| **Surface mesh…** | The mesh of the active scan as OBJ, PLY, STL, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh) |
+| **Surface mesh…** | The mesh of the active scan as OBJ, PLY, STL, GLB, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh) |
 | **Detected faces…** | The faces detected in the active scan as JSON, OBJ, DXF, DWG or IFC; see [Saving the faces](#saving-the-faces) |
 | **Views as BCF…** | The saved views of the active scan; see [BCF export](#bcf-export) |
 
@@ -394,12 +396,14 @@ Every export reads the source again from start to end, so points that are not on
 
 What an export keeps depends on the formats:
 
-- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos.
+- **Same format, nothing edited**: an unedited LAS, LAZ or E57 cloud exported in full to its own format is a byte-for-byte copy. E57 with a photo-edit sidecar is rewritten to embed the edited photos. A full copy of a local COPC LAZ therefore keeps its spatial index. Cropping, merging or converting those points produces ordinary LAS or LAZ. The export omits the COPC index because its byte offsets refer to the original compressed chunks.
 - **LAS and LAZ to LAS or LAZ**: the original point records are written, with their point format, GPS time, return data, 16-bit colours, projection records and coordinate grid. Edits change only the fields they concern.
 - **E57 to E57, filtered**: each source scan keeps its scanner pose, its name, its record types and values, its custom fields and its camera images with their poses. **Move** and a **Scale** with one positive factor for all three axes keep the scans when every scan has a pose.
 - **Everything else**: position, 8-bit colour, intensity and class are written. A new E57 file made this way holds one scan in model coordinates; this writer has no class field for E57 and writes zero where a point has no colour or intensity.
 
-**Merge visible scans…** streams visible E57, LAS/LAZ, PLY, PTX and other supported point-cloud layers into one E57, LAS or LAZ file, with deletions and positive uniform live transforms applied. E57 keeps the separate scans, raw E57 attributes, poses and images when **Keep stations and photos in E57** is checked; unchecked it writes world-space points. Compatible LAS/LAZ inputs keep their full original records. Other LAS/LAZ merges normalise to LAS 1.4 and retain coordinates, colour, intensity and classification; source-specific extra fields and camera images need E57 instead. The Export page and Properties show progress and **Cancel merge**; cancellation leaves an existing destination untouched. Registration does not reproject coordinate reference systems.
+**Merge visible scans…** streams visible E57, LAS/LAZ, PLY, PTX and other supported point-cloud layers into one E57, LAS or LAZ file, with deletions and positive uniform live transforms applied. E57 keeps the separate scans, raw E57 attributes, poses and images when **Keep stations and photos in E57** is checked; unchecked it writes world-space points. Compatible LAS/LAZ inputs keep their full original records. When merging LAS/LAZ scans to LAS or LAZ, all source timestamps must use the same convention. Convert GPS week time and adjusted standard GPS time to a common convention before merging those scans. Other LAS/LAZ merges normalise to LAS 1.4 and retain coordinates, colour, intensity and classification; source-specific extra fields and camera images need E57 instead. The Export page and Properties show progress and **Cancel merge**; cancellation leaves an existing destination untouched. Registration does not reproject coordinate reference systems.
+
+Older LAS point formats (0–5) store overlap as class 12. You can toggle that class in the Project Browser. In formats 6–10 a point can have its own class, such as Ground, and also carry an overlap flag. A LAS/LAZ merge preserves both when writing an extended point format. If a GeoTIFF-only CRS requires a legacy output format that cannot store this combination, the merge asks for the CRS in WKT.
 
 The command line does the same without a window: `--export`, `--section` and `--merge`; see the [README](../README.md#command-line).
 
@@ -711,15 +715,20 @@ These figures say how the triangles hang together. They do not say how far the m
 
 ### Saving a mesh
 
-**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers six formats, and the extension of the file name decides which one is written:
+**Surface mesh…** in the File view, or **Export mesh…** under **Surface mesh** in Properties, saves the mesh of the active scan: a terrain mesh, a 3D surface, a closed mesh, the faces of an opened mesh file or downloaded 3D BAG buildings. The save dialog offers seven formats, and the extension of the file name decides which one is written:
 
 | Format | What the file holds |
 | --- | --- |
 | OBJ (`.obj`) | Text. Positions, and colours and normals per vertex where the mesh has them |
 | PLY (`.ply`) | Binary. Positions as double-precision numbers, so survey coordinates keep all their digits, and colours and normals where the mesh has them |
 | STL (`.stl`) | Binary. Triangles only: no colours, and 32-bit numbers |
+| GLB (`.glb`) | A single binary glTF file with indexed triangles in metres, Y up, vertex colours and normals where available. Local vertex positions and a translation on the mesh node preserve detail at survey coordinates |
 | DXF (`.dxf`), DWG (`.dwg`) | For a CAD program: the triangles as `MESH` entities on the layer `OPS-MESH`, in metres and in version R2013, with double-precision coordinates. A `MESH` entity holds at most 65,536 triangles and 65,536 corners here, so a larger mesh becomes several. A mesh with colours is split by colour: every triangle takes the mean colour of its corners, the colours are reduced to a palette of at most 256, and each palette colour becomes its own entities in that true colour, still on `OPS-MESH`. A corner on the border of two colours is in the entities of both, so such a file is larger than one of the same mesh without colours |
 | IFC (`.ifc`) | For a BIM program: IFC4 with a project, site, building and storey, and the mesh as one building element proxy with a triangulated face set, marked closed when every edge has two triangles. A mesh with colours has a colour per triangle (`IfcIndexedColourMap`) from the same palette of at most 256 colours; the grey surface style stays as the colour for a program that does not read colour maps. See [The CAD and IFC files](#the-cad-and-ifc-files) for where coordinates far from zero go |
+
+To export an open mesh as GLB, choose **Export mesh…** and save it with a name such as `room.glb`. From the command line, run `open-pointcloud-studio --mesh-export room.obj room.glb`.
+
+In Blender 5.3, choose **File → Import → glTF 2.0** and open the GLB. To see the original vertex colours in Solid view, open the Viewport Shading options and select **Attribute** as the colour type.
 
 The mesh is written as the scene shows it, with the move and scale of its scan applied. A scan that is mirrored by a negative scale factor keeps its outside in the file: the corners of the triangles are written in reverse order and the normals point outward. The file appears under its name only when it is complete. The source file of the scan cannot be chosen as the destination.
 
@@ -751,7 +760,7 @@ these texture images. Cancellation before publishing removes staged files;
 cancelling preview preparation after publication retains the completed export.
 
 
-Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, `--texture-mesh INPUT_MESH OUTPUT.obj` writes the atlas of a mesh file with colours, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY, STL, DXF, DWG or IFC by the extension of `OUTPUT`.
+Without a window: `--mesh`, `--surface` and `--closed-mesh` make a mesh, `--texture-mesh INPUT_MESH OUTPUT.obj` writes the atlas of a mesh file with colours, and `--mesh-export INPUT OUTPUT` writes the faces of any mesh file as OBJ, PLY, STL, GLB, DXF, DWG or IFC by the extension of `OUTPUT`.
 
 ## Closed mesh
 
@@ -775,7 +784,7 @@ The points are reduced, per cell of half a voxel, to small pieces of surface wit
 4. When the room was scanned from several stations that are separate files, set **Scans** to **All visible scans** and hide the layers that should stay out. With the section box on, only the visible layers that reach the box take part: a layer that lies outside it is not read and does not count for the size of the region. Layers of 3D BAG buildings are left out. The mesh goes to the active scan either way, so make one of the scans the active layer first: a layer of 3D BAG buildings does not take a mesh of the scans, and the Options step says so.
 5. Choose **Run**. The Run step, and the strip above the scene once the card is closed, show the job step by step, with a **Cancel** button: reading (only for a scan without an index), finding the blocks that hold points, meshing block after block, simplifying across the blocks, and measuring the result. A cancelled job leaves the mesh the scan had as it was.
 6. When the job is done the mesh is shown as the mesh of the active scan, and the status bar and the Run step give its figures; **Show in model** closes the card. Properties keeps the figures under **Surface mesh**. Hide the points of the layer in the project panel to look at the mesh alone; the **Surface** switch of the layer hides the mesh.
-7. The mesh exists in this session only. **Export mesh…** under **Surface mesh** in Properties, or **Surface mesh…** in the File view, saves it as OBJ, PLY, STL, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh).
+7. The mesh exists in this session only. **Export mesh…** under **Surface mesh** in Properties, or **Surface mesh…** in the File view, saves it as OBJ, PLY, STL, GLB, DXF, DWG or IFC; see [Saving a mesh](#saving-a-mesh).
 
 A scan holds one mesh. The closed mesh takes the place of the mesh the active scan had, whichever mesher made it, and Undo does not bring that one back. The mesh is kept in the frame of its scan: **Move** and **Scale** afterwards take the mesh along with the points.
 
@@ -841,7 +850,7 @@ open-pointcloud-studio --closed-mesh scan.e57 room.ply --box 0,0,-0.1,5.1,4.1,2.
 open-pointcloud-studio --closed-mesh merged.laz room.obj --box 0,0,-0.1,5.1,4.1,2.7 --voxel 0.03 --max-hole 0.1 --simplify 0 --sides centre
 ```
 
-The extension of the output chooses OBJ, PLY, STL, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, `--sample-percent` is the share of the source points from 0.01 to 100, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the options start. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
+The extension of the output chooses OBJ, PLY, STL, GLB, DXF, DWG or IFC. `--box` gives the region as X, Y and Z min, then X, Y and Z max; without it the whole file is meshed. `--rotation` turns that box that many degrees about the vertical through its centre. `--voxel` and `--max-hole` are in metres, `--simplify` in millimetres with 0 for none, `--sample-percent` is the share of the source points from 0.01 to 100, and `--sides` is `automatic`, `centre` or `upward`; what is left out is as the options start. The file is read through its index when `--index` or the window built one. Without an index a file of at most 5,000,000 points is read into memory, and a larger one gets an index in a temporary folder that is removed when the job is done. The mode prints the figures of the result, and the advice when there is any.
 
 ## Detected faces
 
@@ -1190,14 +1199,29 @@ When the environment variable `XDG_CONFIG_HOME` is set, on any system, the folde
 | `camera-views.json`, `view-snapshots/` | The saved views of every scan and their snapshots |
 | `instances/` | The discovery file of each running window, for the [command API](../native/API.md) |
 
-Indexes are in the folder `open-pointcloud-studio/indexes`:
+### Index storage
+
+Properties shows the minimum space for the active scan’s index. Each point takes 40 bytes in the leaf files, so 100 million points require at least 4 GB. Previews, filesystem overhead and temporary build files need additional space.
+
+While splitting a node, Studio writes its children before removing the parent. Allow room for that temporary copy. These measurements used a Linux tmpfs with 4 KiB blocks and the default index settings. Sizes are rounded to decimal MB.
+
+| Scan | Points | Leaf records | Completed index on disk | Free space needed to build |
+| --- | ---: | ---: | ---: | ---: |
+| PCL room (PCD) | 112,586 | 4.50 MB | 5.01 MB | 9.10 MB |
+| AHN6 survey crop (LAZ) | 313,232 | 12.53 MB | 14.42 MB | 25.16 MB |
+
+The space needed depends on the point distribution, index settings and filesystem. If indexing reports a full disk, free space on the index volume and retry. Studio removes the unfinished build and keeps completed indexes. [Validation results](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/68)
+
+To put persistent indexes and cached previews on a different volume, set `OPS_INDEX_DIR` to an absolute, writable directory dedicated to Studio before launch. On Linux, for example, use `OPS_INDEX_DIR=/mnt/survey-cache open-pointcloud-studio`. On Windows you can use a local drive or a UNC path. Changing the folder starts a separate cache. Existing files stay in their original folder.
+
+An unset, empty or relative value uses the normal cache location:
 
 | System | Folder |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\open-pointcloud-studio\indexes` |
 | Linux and macOS | `~/.cache/open-pointcloud-studio/indexes` |
 
-When `XDG_CACHE_HOME` is set, the folder is `$XDG_CACHE_HOME/open-pointcloud-studio/indexes`. The folder can be deleted while the application is closed; the indexes are built again when the scans are opened.
+For the normal cache location, when `XDG_CACHE_HOME` is set, the folder is `$XDG_CACHE_HOME/open-pointcloud-studio/indexes`. The folder can be deleted while the application is closed; the indexes are built again when the scans are opened.
 
 Nothing is written beside the scans, and the scans themselves are never changed.
 

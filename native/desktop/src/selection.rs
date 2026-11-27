@@ -114,6 +114,18 @@ impl SelectionMask {
         })
     }
 
+    pub fn live_count(&self, deleted: Option<&DeletionMask>) -> u64 {
+        deleted.map_or(self.count, |mask| {
+            let overlap: u64 = self
+                .bits
+                .iter()
+                .zip(&mask.bits)
+                .map(|(&selected, &hidden)| u64::from((selected & hidden).count_ones()))
+                .sum();
+            self.count - overlap
+        })
+    }
+
     pub fn contains(&self, ordinal: u64) -> bool {
         let word = usize::try_from(ordinal / 64).ok();
         word.and_then(|index| self.bits.get(index))
@@ -263,6 +275,23 @@ impl DeletionMask {
                 .iter()
                 .zip(&selection.bits)
                 .any(|(deleted, selected)| deleted & selected != 0)
+    }
+
+    /// The undo record for a partially overlapping delete needs only the
+    /// ordinals which this edit changed. The prior deletion stays in force.
+    pub fn newly_deleted(&self, selection: &SelectionMask, added: u64) -> SelectionMask {
+        SelectionMask {
+            bits: selection
+                .bits
+                .iter()
+                .zip(&self.bits)
+                .map(|(selected, hidden)| selected & !hidden)
+                .collect(),
+            count: added,
+            highlights: Vec::new(),
+            highlights_source: true,
+            source_bounds: None,
+        }
     }
 
     pub fn apply(&mut self, selection: &SelectionMask) -> Result<u64, String> {

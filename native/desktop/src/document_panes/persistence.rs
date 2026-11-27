@@ -26,7 +26,8 @@ struct Restore {
     queue: VecDeque<String>,
     waiting: Option<(String, Instant)>,
     initialized: bool,
-    started: Instant,
+    last_progress: Instant,
+    importing: (usize, u64),
 }
 impl Persistence {
     pub fn new() -> Self {
@@ -87,7 +88,8 @@ impl Persistence {
             queue,
             waiting: None,
             initialized: false,
-            started: Instant::now(),
+            last_progress: Instant::now(),
+            importing: (0, 0),
         });
         paths
     }
@@ -103,17 +105,39 @@ impl Persistence {
         let Some(mut restore) = self.restore.take() else {
             return Task::none();
         };
-        if restore.started.elapsed() > Duration::from_secs(180) {
+        // A saved camera is relative to the checked scene bounds. Import headers
+        // and progressive previews can already be visible while those bounds change.
+        if !restore.initialized {
+            let mut importing = (0, 0u64);
+            for job in studio.imports.values() {
+                if restore
+                    .state
+                    .sources
+                    .iter()
+                    .any(|source| source.path == job.path)
+                {
+                    importing.0 += 1;
+                    importing.1 += job.decoded.load(std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            if importing != restore.importing {
+                restore.importing = importing;
+                restore.last_progress = Instant::now();
+            }
+        }
+        if restore.last_progress.elapsed() > Duration::from_secs(180) {
             self.fail("some layout sources or documents could not be reopened");
             studio.status = self.error.clone().unwrap_or_default();
             return Task::none();
         }
-        if restore.state.sources.iter().any(|source| {
-            !studio
-                .clouds
-                .iter()
-                .any(|entry| entry.cloud.path == source.path)
-        }) {
+        if restore.importing.0 > 0
+            || restore.state.sources.iter().any(|source| {
+                !studio
+                    .clouds
+                    .iter()
+                    .any(|entry| entry.cloud.path == source.path)
+            })
+        {
             self.restore = Some(restore);
             return Task::none();
         }

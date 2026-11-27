@@ -71,30 +71,65 @@ pub fn mesh_deviation_progress<E>(
     let mut distances = Vec::with_capacity(points.len());
     let mut handled = 0u64;
     for chunk in points.chunks(DEVIATION_CHUNK) {
-        distances.par_extend(
-            chunk
-                .par_iter()
-                .with_min_len(1024)
-                .filter(|point| point.iter().all(|value| value.is_finite()))
-                // One search stack per worker instead of one per point.
-                .map_init(Vec::new, |pending, point| index.distance(*point, pending)),
-        );
+        measure_points(&index, chunk, &mut distances);
         handled += chunk.len() as u64;
         proceed(handled, total)?;
     }
+    Ok(summarize_distances(distances))
+}
+
+/// Measure every finite point in a source file against one triangle index.
+/// Keep one distance per measured point for the exact nearest-rank P95.
+pub fn mesh_source_deviation(
+    mesh: &MeshGeometry,
+    source: &std::path::Path,
+) -> Result<MeshDeviation, crate::LoadError> {
+    let index = TriangleIndex::build(mesh)
+        .ok_or_else(|| crate::LoadError::InvalidData("mesh has no indexable triangles".into()))?;
+    let mut points = Vec::with_capacity(DEVIATION_CHUNK);
+    let mut distances = Vec::new();
+    crate::visit_points(source, &mut |point| {
+        points.push(point.xyz);
+        if points.len() == DEVIATION_CHUNK {
+            measure_points(&index, &points, &mut distances);
+            points.clear();
+        }
+        Ok(())
+    })?;
+    measure_points(&index, &points, &mut distances);
     if distances.is_empty() {
-        return Ok(MeshDeviation::default());
+        return Err(crate::LoadError::InvalidData(
+            "no finite source points to measure".into(),
+        ));
+    }
+    Ok(summarize_distances(distances))
+}
+
+fn measure_points(index: &TriangleIndex, points: &[[f64; 3]], distances: &mut Vec<f64>) {
+    distances.par_extend(
+        points
+            .par_iter()
+            .with_min_len(1024)
+            .filter(|point| point.iter().all(|value| value.is_finite()))
+            // One search stack per worker instead of one per point.
+            .map_init(Vec::new, |pending, point| index.distance(*point, pending)),
+    );
+}
+
+fn summarize_distances(mut distances: Vec<f64>) -> MeshDeviation {
+    if distances.is_empty() {
+        return MeshDeviation::default();
     }
     distances.sort_unstable_by(f64::total_cmp);
     let samples = distances.len();
     // Nearest rank: the smallest measured distance that covers 95 %.
-    let rank = (samples * 95).div_ceil(100).max(1);
-    Ok(MeshDeviation {
+    let rank = samples - samples / 20;
+    MeshDeviation {
         mean: distances.iter().sum::<f64>() / samples as f64,
         p95: distances[rank - 1],
         max: distances[samples - 1],
         samples: samples as u64,
-    })
+    }
 }
 
 /// Count open and non-manifold edges, connected components and the Euler
@@ -900,6 +935,24 @@ mod tests {
         assert!((past_corner.max - 0.5).abs() < 1e-12);
         let below = mesh_deviation(&square, &[[0.3, 0.6, -2.0]]);
         assert!((below.max - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn file_deviation_measures_full_chunks_and_the_last_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scan.xyz");
+        let mut xyz = "0.5 0.5 1\n".repeat(DEVIATION_CHUNK);
+        xyz.push_str("0.5 0.5 3\n");
+        std::fs::write(&path, xyz).unwrap();
+        let deviation = mesh_source_deviation(&unit_square(), &path).unwrap();
+        let count = DEVIATION_CHUNK + 1;
+        assert_eq!(deviation.samples, count as u64);
+        assert_eq!(deviation.mean, (count + 2) as f64 / count as f64);
+        assert_eq!(deviation.p95, 1.0);
+        assert_eq!(deviation.max, 3.0);
+
+        std::fs::write(&path, "").unwrap();
+        assert!(mesh_source_deviation(&unit_square(), &path).is_err());
     }
 
     #[test]

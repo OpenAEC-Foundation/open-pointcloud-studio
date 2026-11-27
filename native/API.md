@@ -441,7 +441,10 @@ destination in a folder that exists, and its extension chooses the format:
   representation; a cylinder seen from inside is the triangulated scanned
   surface. The property set `OPS_ScanGeometry` holds the class, area,
   coverage and residuals of a face and the radius, length and arc of a
-  cylinder. Coordinates far from zero are placed as for `export_mesh`.
+  cylinder. For both planes and cylinders, `ResidualMean` is the signed mean
+  distance and `ResidualMeanAbs` is the mean absolute distance. These and
+  `ResidualRms`, `ResidualP95` and `ResidualMax` are lengths in metres.
+  Coordinates far from zero are placed as for `export_mesh`.
 
 The complete job has `operation` (`export_faces`), `path`, `format` (`json`,
 `obj`, `dxf`, `dwg` or `ifc`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
@@ -1108,9 +1111,10 @@ Native pane layouts and source references are stored atomically in
 without explicit input files reopens its sources and restores the main-window
 pane tree, document looks, source affine edits/visibility and shared section.
 The file contains references and display state; unsaved point edits are not
-recovered from it. Unsupported or invalid files are preserved. Current startup
-docks satellite documents into the main window while screen identity cannot be
-verified; retaining verified monitor placements remains pending.
+recovered from it. Unsupported or invalid files are preserved. On startup each
+satellite's pane tree returns to the main window with its splits, tab selections
+and links intact. Reopening a window on its original monitor requires platform
+monitor identification, which is still pending.
 
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`
@@ -1506,6 +1510,11 @@ kept, of all layers together, and a new edit ends what `redo_delete` could
 do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
 colouring lets go of the oldest edits. `remove` of any layer empties this
 history for every layer.
+
+When a selection overlaps an earlier deletion, the global and per-layer selected
+counts include only the points still present. Undoing a second deletion restores
+only the points hidden by that second edit. Clearing the selection also drops
+any selected ordinals currently hidden by a deletion.
 
 `translate` and `scale` are taken back with `reset_transform`, which puts
 the active layer back at the coordinates of its source; `reset_transform`

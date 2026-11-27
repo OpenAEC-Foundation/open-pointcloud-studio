@@ -49,6 +49,15 @@ Write the path out: most clients do not fill in `%LOCALAPPDATA%` or `~`. In
 JSON every backslash of a Windows path is written twice:
 `"C:\\Program Files\\Open Pointcloud Studio\\open-pointcloud-studio.exe"`.
 
+For Claude Code, run these commands from the project where you want to use Studio. Substitute the installed executable path from the table. The local scope keeps the entry private to this project.
+
+```sh
+claude mcp add --transport stdio --scope local open-pointcloud-studio -- /usr/bin/open-pointcloud-studio --mcp
+claude mcp get open-pointcloud-studio
+```
+
+A connected status confirms the stdio server started. To check that it reaches the intended Studio window, open a scan there and ask Claude Code to call the Studio `status` tool and report the active file and its point count. See the [Claude Code MCP guide](https://code.claude.com/docs/en/mcp).
+
 A development build works the same way:
 `cargo run -p open-pointcloud-studio-native -- --mcp` from `native/`, or the
 built `target/release/open-pointcloud-studio --mcp`.
@@ -461,5 +470,7 @@ for fields and units.
 ## Managed native HTTP transport
 
 `--mcp-http` uses the desktop server's existing tool table, schemas and operations. It provides stateful Streamable HTTP on `POST /mcp`; JSON replies are supported, and `GET /mcp` returns 405 because no unsolicited SSE stream is provided. Initialize first, retain the returned `Mcp-Session-Id`, and end the session with DELETE. HTTP names have the `pointcloud_` prefix plus the `pointcloud_stand`/`pointcloud_opslaan` aliases. Stdio names and behavior are unchanged.
+
+To prepare a new Docs version, open the mounted input with `pointcloud_open` and wait for `pointcloud_wait_until_idle`. Give `pointcloud_opslaan` a separate absolute output path in the mounted work directory (for example, `/openaec/next.xyz`). It returns a `job_id`. Pass that ID to `pointcloud_wait_for_job` and collect the file at `job.path` only when `job.state` is `complete`. A timeout means the host can wait again for the same job. A failed save must not publish a new version. The host handles the Docs version ID and upload. A save to the active source path fails in v2026.48.0.
 
 Configure `OPENAEC_MCP_POORT`, `OPENAEC_MCP_GEHEIM` and optionally `OPENAEC_MCP_ADRES`; see the repository README for authentication, internal-network deployment, managed window settings and the shared `XDG_CONFIG_HOME`. Sessions expire after 30 idle minutes and are limited to 16. At most eight HTTP tool calls are admitted at once, and a session serializes tool calls. Cancellation notifications can be handled while a tool waits. Request bodies are limited to 1 MiB. This desktop transport is distinct from the smaller headless cloud API's MCP endpoint.

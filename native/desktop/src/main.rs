@@ -123,6 +123,7 @@ use ui_theme::UiTheme;
 pub(crate) const APP_NAME: &str = "Open Pointcloud Studio";
 /// Where the source code of the application is published.
 pub(crate) const SOURCE_URL: &str = "https://github.com/OpenAEC-Foundation/open-pointcloud-studio";
+const SAMPLE_SCAN_URL: &str = "https://raw.githubusercontent.com/PointCloudLibrary/data/084fa0e260580cc765ded83de4ec3f495f1d6f1e/tutorials/room_scan1.pcd";
 /// The version as the status bar shows it.
 const VERSION_LABEL: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 /// The name window managers and launchers know the application by, which is
@@ -146,6 +147,7 @@ fn title_for(active: Option<&str>) -> String {
 
 const LOAD_SAMPLE_LIMIT: usize = 100_000;
 const EXACT_VISIBLE_LOD_ZOOM: f32 = 0.05;
+const HIGH_DENSITY_LOD_THRESHOLD: usize = 10_000_000;
 const MAX_EXACT_VISIBLE_LOD_CANDIDATES: u64 = 2_000_000;
 const AUTO_INDEX_MIN_POINTS: u64 = 1_000_000;
 const ONE_PASS_IMPORT_MIN_BYTES: u64 = 64 * 1024 * 1024;
@@ -163,6 +165,7 @@ const ASPRS_CLASSIFICATIONS: &[(u8, &str)] = &[
     (9, i18n::key("Water")),
     (10, i18n::key("Rail")),
     (11, i18n::key("Road surface")),
+    (12, i18n::key("Overlap (legacy LAS)")),
     (13, i18n::key("Wire guard")),
     (14, i18n::key("Wire conductor")),
     (15, i18n::key("Transmission tower")),
@@ -391,6 +394,45 @@ fn export_edited_where(
             expected_count,
             |ordinal, point| include(ordinal, &point).then(|| transform.point(point)),
         )
+    }
+}
+
+/// Keep point membership and the count written to format headers in sync,
+/// including when a selection still contains points hidden by later edits.
+struct ExportSelection<'a> {
+    mask: &'a SelectionMask,
+    deleted: Option<&'a DeletionMask>,
+    selected_only: bool,
+}
+
+impl ExportSelection<'_> {
+    fn write(
+        &self,
+        cloud: &PointCloud,
+        path: &Path,
+        format: ExportFormat,
+        transform: CloudTransform,
+        colours: Option<&PointColours>,
+    ) -> Result<u64, pointcloud_core::LoadError> {
+        let selected = self.mask.live_count(self.deleted);
+        let count = if self.selected_only {
+            selected
+        } else {
+            cloud.total_points - self.deleted.map_or(0, |mask| mask.count) - selected
+        };
+        export_edited_where(
+            cloud,
+            path,
+            format,
+            transform,
+            colours,
+            count,
+            |ordinal, _| {
+                self.mask.contains(ordinal) == self.selected_only
+                    && self.deleted.is_none_or(|mask| !mask.contains(ordinal))
+            },
+        )?;
+        Ok(count)
     }
 }
 
@@ -1020,6 +1062,13 @@ fn main() -> iced::Result {
                 std::process::exit(code);
             }
         }
+    }
+    if first.as_deref() == Some(OsStr::new("--mesh-deviation")) {
+        cli::finish(
+            cli::mesh_deviation(&args.collect::<Vec<_>>()),
+            "Usage: open-pointcloud-studio --mesh-deviation SCAN MESH",
+        );
+        return Ok(());
     }
     if first.as_deref() == Some(OsStr::new("--mesh")) {
         cli::finish(
@@ -2063,6 +2112,8 @@ enum Message {
     PhotoSplitFinished,
     CompareModel(view_tabs::CompareAction),
     Budget(u32),
+    EditBudget(String),
+    ApplyBudget,
     FilterClass(u8, bool),
     SetSectionEnabled(bool),
     SectionMin(usize, f32),
@@ -2245,6 +2296,7 @@ struct Studio {
     /// Modifier keys held down, for range and toggle clicks in the project list.
     modifiers: iced::keyboard::Modifiers,
     budget: u32,
+    budget_input: Option<String>,
     filter_ground: bool,
     filter_vegetation: bool,
     filter_buildings: bool,
@@ -2437,6 +2489,7 @@ struct CloudEntry {
     index_import_id: Option<u64>,
     transform: CloudTransform,
     centroid_cache: Option<CentroidCache>,
+    selected_count_cache: std::cell::RefCell<Option<SelectedCountCache>>,
     mesh: Option<Arc<MeshGeometry>>,
     /// The open edges and connected parts of `mesh`, counted when it was
     /// made or read.
@@ -2548,6 +2601,19 @@ struct LodRefinement {
 }
 
 impl LodRefinement {
+    fn exact_scan_limit(&self, layer_quota: usize) -> u64 {
+        let density_limit = if self.budget > HIGH_DENSITY_LOD_THRESHOLD {
+            layer_quota as u64
+        } else {
+            0
+        };
+        if self.deep_zoom {
+            density_limit.max(MAX_EXACT_VISIBLE_LOD_CANDIDATES)
+        } else {
+            density_limit
+        }
+    }
+
     fn sample_pass(&mut self) -> Result<(), String> {
         let results: Result<Vec<_>, String> = self
             .sources
@@ -2558,25 +2624,16 @@ impl LodRefinement {
                 let limit = self.requested[slot];
                 let section = self.section;
                 let projection = self.projection;
-                let deep_zoom = self.deep_zoom;
                 let projected =
                     |node_bounds| lod_node_span(*transform, section, projection, node_bounds);
                 // At a high requested density, read the visible leaves in full
                 // when their records fit this layer's share of the budget.
                 // The index counts candidates before opening any leaf files.
-                let high_density = self.budget > 10_000_000;
-                let exact = if deep_zoom || high_density {
+                let scan_limit = self.exact_scan_limit(limit);
+                let exact = if scan_limit > 0 {
                     tree.sample_visible_indexed_cancellable(
                         limit,
-                        if high_density {
-                            (limit as u64).max(if deep_zoom {
-                                MAX_EXACT_VISIBLE_LOD_CANDIDATES
-                            } else {
-                                0
-                            })
-                        } else {
-                            MAX_EXACT_VISIBLE_LOD_CANDIDATES
-                        },
+                        scan_limit,
                         |bounds| projected(bounds).is_some(),
                         |record| {
                             let xyz = transform.xyz(record.point.xyz);
@@ -2608,6 +2665,30 @@ impl LodRefinement {
     }
 
     fn next_limits(&self) -> Option<Vec<usize>> {
+        // A coarse preview can return fewer points than requested even when
+        // the final layer quota would allow an exact read of the visible leaves.
+        if self.pass == 0 && self.budget > HIGH_DENSITY_LOD_THRESHOLD {
+            let full = distribute_lod_budget(self.budget, &self.source_weights);
+            let can_refine =
+                self.sources
+                    .iter()
+                    .enumerate()
+                    .any(|(slot, (_, tree, transform, _))| {
+                        let first = self.requested[slot];
+                        let first_scan_limit = self.exact_scan_limit(first);
+                        self.samples[slot].len() < first
+                            && full[slot] as u64 > first_scan_limit
+                            && tree
+                                .visible_leaf_candidates(full[slot] as u64, |bounds| {
+                                    lod_node_span(*transform, self.section, self.projection, bounds)
+                                        .is_some()
+                                })
+                                .is_some_and(|count| count > first_scan_limit)
+                    });
+            if can_refine {
+                return Some(full);
+            }
+        }
         rebalance_lod_limits(
             self.budget,
             &self.source_weights,
@@ -2709,6 +2790,12 @@ impl LodRefinement {
         fill.points /= drawn.div_ceil(self.budget.max(1)).max(1);
         fill
     }
+}
+
+struct SelectedCountCache {
+    selection: std::sync::Weak<SelectionMask>,
+    deleted: std::sync::Weak<DeletionMask>,
+    count: u64,
 }
 
 struct CentroidCache {
@@ -2854,6 +2941,32 @@ impl CloudEntry {
         self.transform.bounds(self.cloud.bounds)
     }
 
+    fn selected_count(&self) -> u64 {
+        let Some(selection) = &self.selection else {
+            return 0;
+        };
+        let Some(deleted) = self.deleted.as_ref().filter(|mask| mask.count > 0) else {
+            return selection.count;
+        };
+        // UI redraws reuse the count until either ordinal mask changes. Weak
+        // references also invalidate the cache when Arc::make_mut edits a mask.
+        let mut cache = self.selected_count_cache.borrow_mut();
+        if let Some(known) = cache.as_ref() {
+            if known.selection.as_ptr() == Arc::as_ptr(selection)
+                && known.deleted.as_ptr() == Arc::as_ptr(deleted)
+            {
+                return known.count;
+            }
+        }
+        let count = selection.live_count(Some(deleted));
+        *cache = Some(SelectedCountCache {
+            selection: Arc::downgrade(selection),
+            deleted: Arc::downgrade(deleted),
+            count,
+        });
+        count
+    }
+
     fn deleted_count(&self) -> u64 {
         self.deleted.as_ref().map_or(0, |mask| mask.count)
     }
@@ -2964,6 +3077,7 @@ impl Default for Studio {
             memory_usage: memory_usage::MemoryUsage::default(),
             modifiers: iced::keyboard::Modifiers::default(),
             budget: settings.budget,
+            budget_input: None,
             // The four class groups no longer have switches; classes are
             // shown or hidden one by one in the project panel.
             filter_ground: true,
@@ -3281,6 +3395,7 @@ impl Studio {
             index_import_id: None,
             transform: CloudTransform::default(),
             centroid_cache: None,
+            selected_count_cache: Default::default(),
             mesh: None,
             mesh_topology: None,
             mesh_visible: true,
@@ -4039,7 +4154,7 @@ impl Studio {
                             "path": entry.cloud.path,
                             "points": entry.cloud.total_points,
                             "remaining": entry.remaining_count(),
-                            "selected": entry.selection.as_ref().map_or(0, |mask| mask.count),
+                            "selected": entry.selected_count(),
                             "deleted": entry.deleted.as_ref().map_or(0, |mask| mask.count),
                             "visible": entry.visible,
                             "indexed": entry.index.is_some(),
@@ -5485,7 +5600,7 @@ impl Studio {
                     Task::none(),
                 );
             };
-            Some((Arc::clone(mask), entry.remaining_count()))
+            Some(Arc::clone(mask))
         } else {
             None
         };
@@ -5517,13 +5632,8 @@ impl Studio {
                 move |result| Message::ApiExported(completion_id.clone(), true, result),
             );
             (response, task)
-        } else if let Some((mask, remaining)) = selection {
+        } else if let Some(mask) = selection {
             let selected = mode == ApiExportMode::Selected;
-            let expected_count = if selected {
-                mask.count
-            } else {
-                remaining.saturating_sub(mask.count)
-            };
             self.status = if selected {
                 "Exporting selected points through native API…"
             } else {
@@ -5534,25 +5644,13 @@ impl Studio {
             let task = Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        export_edited_where(
-                            &cloud,
-                            &path,
-                            format,
-                            transform,
-                            colours.as_deref(),
-                            expected_count,
-                            |ordinal, _| {
-                                if selected {
-                                    mask.contains(ordinal)
-                                } else {
-                                    !mask.contains(ordinal)
-                                        && deleted
-                                            .as_ref()
-                                            .is_none_or(|bits| !bits.contains(ordinal))
-                                }
-                            },
-                        )
-                        .map(|()| (path, expected_count))
+                        ExportSelection {
+                            mask: &mask,
+                            deleted: deleted.as_deref(),
+                            selected_only: selected,
+                        }
+                        .write(&cloud, &path, format, transform, colours.as_deref())
+                        .map(|count| (path, count))
                         .map_err(|error| error.to_string())
                     })
                     .await
@@ -5985,6 +6083,7 @@ impl Studio {
                         index_import_id: None,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7205,6 +7304,7 @@ impl Studio {
                         cloud,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
+                        selected_count_cache: Default::default(),
                         mesh: None,
                         mesh_topology: None,
                         mesh_visible: true,
@@ -7782,7 +7882,8 @@ impl Studio {
                     self.status = format!("Could not open 3DBAG license: {error}");
                 }
             }
-            Message::ExportSelection => {
+            Message::ExportSelection | Message::RemoveSelection => {
+                let selected_only = matches!(message, Message::ExportSelection);
                 if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
                     if let Some(mask) = entry.selection.as_ref().filter(|mask| mask.count > 0) {
                         let format = self.export_format;
@@ -7790,66 +7891,33 @@ impl Studio {
                             .cloud
                             .path
                             .file_stem()
-                            .and_then(|stem| stem.to_str())
+                            .and_then(|name| name.to_str())
                             .unwrap_or("pointcloud");
-                        let suggestion = format!("{stem}-selection.{}", format.extension());
+                        let suffix = if selected_only {
+                            "selection"
+                        } else {
+                            "without-selection"
+                        };
+                        let suggestion = format!("{stem}-{suffix}.{}", format.extension());
                         let cloud = Arc::clone(&entry.cloud);
                         let mask = Arc::clone(mask);
+                        let deleted = entry.deleted.clone();
                         let transform = entry.transform;
-                        let colours = entry.colours.as_ref().map(Arc::clone);
-                        self.status =
-                            format!("Choose where to export {} selected points…", mask.count);
+                        let colours = entry.colours.clone();
+                        self.status = if selected_only {
+                            "Choose where to export the selected points…"
+                        } else {
+                            "Choose where to export the points outside the selection…"
+                        }
+                        .into();
                         return save_task(suggestion, format, move |path| {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                colours.as_deref(),
-                                mask.count,
-                                |ordinal, _| mask.contains(ordinal),
-                            )
-                            .map(|()| path)
-                            .map_err(|error| error.to_string())
-                        });
-                    }
-                }
-            }
-            Message::RemoveSelection => {
-                if let Some(entry) = self.active.and_then(|index| self.clouds.get(index)) {
-                    if let Some(mask) = entry.selection.as_ref().filter(|mask| mask.count > 0) {
-                        let format = self.export_format;
-                        let stem = entry
-                            .cloud
-                            .path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("pointcloud");
-                        let suggestion = format!("{stem}-without-selection.{}", format.extension());
-                        let cloud = Arc::clone(&entry.cloud);
-                        let mask = Arc::clone(mask);
-                        let deleted = entry.deleted.as_ref().map(Arc::clone);
-                        let transform = entry.transform;
-                        let colours = entry.colours.as_ref().map(Arc::clone);
-                        let expected = entry.remaining_count().saturating_sub(mask.count);
-                        self.status =
-                            format!("Choose output file without {} selected points…", mask.count);
-                        return save_task(suggestion, format, move |path| {
-                            export_edited_where(
-                                &cloud,
-                                &path,
-                                format,
-                                transform,
-                                colours.as_deref(),
-                                expected,
-                                |ordinal, _| {
-                                    !mask.contains(ordinal)
-                                        && deleted
-                                            .as_ref()
-                                            .is_none_or(|bits| !bits.contains(ordinal))
-                                },
-                            )
-                            .map(|()| path)
+                            ExportSelection {
+                                mask: &mask,
+                                deleted: deleted.as_deref(),
+                                selected_only,
+                            }
+                            .write(&cloud, &path, format, transform, colours.as_deref())
+                            .map(|_| path)
                             .map_err(|error| error.to_string())
                         });
                     }
@@ -7890,12 +7958,18 @@ impl Studio {
                     };
                     match deleted.apply(selection) {
                         Ok(added) if added > 0 => {
+                            let changed = match &entry.deleted {
+                                Some(previous) if added < selection.count => {
+                                    Arc::new(previous.newly_deleted(selection, added))
+                                }
+                                _ => Arc::clone(selection),
+                            };
                             removed += added;
                             updates.push((
                                 index,
                                 Arc::new(deleted),
                                 Arc::clone(&entry.cloud),
-                                Arc::clone(selection),
+                                changed,
                             ));
                         }
                         Ok(_) => {}
@@ -8954,7 +9028,22 @@ impl Studio {
                 return Task::batch([self.sync_walk_station(), self.schedule_detail()]);
             }
             Message::MemoryTick => self.memory_usage.refresh(),
+            Message::EditBudget(value) => self.budget_input = Some(value),
+            Message::ApplyBudget => {
+                if let Some(input) = self.budget_input.take() {
+                    if let Some(value) = input
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| (MIN_POINT_BUDGET..=MAX_POINT_BUDGET).contains(value))
+                    {
+                        return self.update(Message::Budget(value));
+                    }
+                    self.status = i18n::tr("Enter a whole number from 1000 to 50000000.").into();
+                }
+            }
             Message::Budget(budget) => {
+                self.budget_input = None;
                 self.budget = budget;
                 self.revision += 1;
                 return Task::batch([self.schedule_detail(), self.queue_preferences_save()]);
@@ -9585,7 +9674,7 @@ impl Studio {
                 let annotating = self.views.leave_tool();
                 self.bag_map_drawing = false;
                 self.drag_rectangle = None;
-                let deselected = self.selected_total() > 0;
+                let deselected = self.clouds.iter().any(|entry| entry.selection.is_some());
                 if deselected {
                     self.pending_delete = false;
                     self.revision += 1;
@@ -9821,11 +9910,7 @@ impl Studio {
     }
 
     fn selected_total(&self) -> u64 {
-        self.clouds
-            .iter()
-            .filter_map(|entry| entry.selection.as_ref())
-            .map(|selection| selection.count)
-            .sum()
+        self.clouds.iter().map(CloudEntry::selected_count).sum()
     }
 
     fn cancel_selection(&mut self) -> bool {
@@ -10876,6 +10961,8 @@ impl Studio {
                 container::Style::default().background(ui_theme::colors(theme).border_subtle)
             })
         };
+        let current_budget = self.budget.to_string();
+        let budget_input = self.budget_input.as_deref().unwrap_or(&current_budget);
         let panel = column![
             text(i18n::tr("CAMERA")).size(10).font(fonts::MEDIUM),
             row![
@@ -10964,8 +11051,11 @@ impl Studio {
                     Message::Budget
                 )
                 .step(100_000_u32)
-                .width(130),
-                text(format!("{:.1}M", f64::from(self.budget) / 1_000_000.0)).size(11),
+                .width(Fill),
+                ui_style::text_input("", budget_input)
+                    .on_input(Message::EditBudget)
+                    .on_submit(Message::ApplyBudget)
+                    .width(74),
             ]
             .spacing(6)
             .align_y(iced::Alignment::Center),
@@ -11119,7 +11209,7 @@ impl Studio {
                         icon_svg(ToolIcon::Clear, 25.0),
                         "Clear selection",
                         Message::ClearSelection,
-                        selected > 0
+                        self.clouds.iter().any(|entry| entry.selection.is_some())
                     ),
                 ]
                 .spacing(0),
@@ -11680,6 +11770,25 @@ impl Studio {
             .width(Fill)
             .height(Fill)
         };
+        let canvas = if model_visible
+            && self.clouds.is_empty()
+            && self.imports.is_empty()
+            && !self.views.capturing()
+        {
+            canvas.push(
+                container(
+                    button(text(i18n::tr("Download sample room scan ↗")).size(13))
+                        .on_press(Message::OpenUrl(SAMPLE_SCAN_URL))
+                        .style(ui_style::link)
+                        .padding([4, 8]),
+                )
+                .center(Fill)
+                // The empty-view prompt is just above the centre of the canvas.
+                .padding(iced::Padding::default().top(36)),
+            )
+        } else {
+            canvas
+        };
         let canvas = if self.walk.is_some()
             && !photo_compare
             && !self.drawing_view.shown
@@ -11776,9 +11885,7 @@ impl Studio {
         let active_cloud = self.active.and_then(|index| self.clouds.get(index));
         let source_points = active_cloud.map_or(0, |entry| entry.cloud.total_points);
         let view_points = self.view_sample();
-        let selected_points = active_cloud
-            .and_then(|entry| entry.selection.as_ref())
-            .map_or(0, |selection| selection.count);
+        let selected_points = active_cloud.map_or(0, CloudEntry::selected_count);
         let indexed = active_cloud.is_some_and(|entry| entry.index.is_some());
         let filename = active_cloud.map_or(i18n::tr("No file loaded"), |entry| {
             display_name(&entry.cloud.path)
@@ -11830,6 +11937,12 @@ impl Studio {
             opencad_properties::property_row("Selected", format_count(selected_points)),
         ] {
             properties = properties.push(row);
+        }
+        if source_points > 0 {
+            properties = properties.push(opencad_properties::property_row(
+                "Index size (minimum)",
+                drawing::size_text(pointcloud_core::minimum_index_bytes(source_points)),
+            ));
         }
         if self.active.is_some() {
             properties = properties.push(self.transform_properties());
@@ -11986,7 +12099,7 @@ impl Studio {
             if let Some(point) = entry
                 .selection
                 .as_deref()
-                .filter(|selection| selection.count == 1)
+                .filter(|selection| selection.count == 1 && selected_points == 1)
                 .and_then(|selection| selection.highlights.first())
             {
                 let point = if entry
@@ -14802,9 +14915,9 @@ impl canvas::Program<Message> for PointViewport<'_> {
         let Some(overall_bounds) = combined_bounds(self.clouds) else {
             frame.fill_text(canvas::Text {
                 content: if self.loading_status.is_some() {
-                    "Importing point cloud…"
+                    i18n::tr("Importing point cloud…")
                 } else {
-                    "Open a point cloud to begin"
+                    i18n::tr("Drop a scan here or choose Open")
                 }
                 .into(),
                 position: UiPoint::new(bounds.width * 0.5, bounds.height * 0.5 - 14.0),
@@ -16878,6 +16991,53 @@ mod editing_tests {
     }
 
     #[test]
+    fn undoing_an_overlapping_delete_only_restores_points_changed_by_that_edit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selection.xyz");
+        std::fs::write(&path, "1 0 0\n2 0 0\n3 0 0\n4 0 0\n").unwrap();
+        let mut studio = Studio::default();
+        let cloud = Arc::new(pointcloud_core::open(&path, 4).unwrap());
+        let _ = studio.update(Message::Loaded(Ok(Arc::clone(&cloud))));
+        let mask = |bits: u64| {
+            let record = IndexedPoint {
+                ordinal: 0,
+                point: cloud.points[0],
+            };
+            let mut mask = SelectionMask::single(4, record).unwrap();
+            mask.bits[0] = bits;
+            mask.count = u64::from(bits.count_ones());
+            Arc::new(mask)
+        };
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::DeleteSelection);
+        let _ = studio.update(Message::UndoDelete);
+        studio.clouds[0].selection = Some(mask(0b1110));
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 2);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.selected_total(), 3);
+        let _ = studio.update(Message::RedoDelete);
+        let _ = studio.update(Message::DeleteSelection);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let deleted = studio.clouds[0].deleted.as_ref().unwrap();
+        assert!(deleted.contains(0) && deleted.contains(1));
+        assert!(!deleted.contains(2) && !deleted.contains(3));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 0);
+        let _ = studio.update(Message::UndoDelete);
+        let _ = studio.update(Message::UndoDelete);
+        assert_eq!(studio.clouds[0].remaining_count(), 4);
+        studio.clouds[0].selection = Some(mask(0b0011));
+        let _ = studio.update(Message::RedoDelete);
+        assert_eq!(studio.selected_total(), 0);
+        let _ = studio.update(Message::Escape);
+        let _ = studio.update(Message::UndoDelete);
+        assert!(studio.clouds[0].selection.is_none());
+    }
+
+    #[test]
     fn delete_undo_redo_keep_source_ordinals_across_two_clouds() {
         let directory = tempfile::tempdir().unwrap();
         let mut studio = Studio::default();
@@ -17075,6 +17235,28 @@ mod lod_transition_tests {
     }
 
     #[test]
+    fn typing_a_point_budget_only_changes_the_view_on_a_valid_submission() {
+        let mut studio = Studio::default();
+        let _ = studio.update(Message::Budget(250_000));
+        let _ = studio.update(Message::EditBudget("50000".into()));
+        assert_eq!(studio.budget, 250_000);
+        let _ = studio.update(Message::ApplyBudget);
+        assert_eq!(studio.budget, 50_000);
+        assert!(studio.budget_input.is_none());
+
+        for input in ["", "499.5", "999", "50000001"] {
+            let _ = studio.update(Message::EditBudget(input.into()));
+            let _ = studio.update(Message::ApplyBudget);
+            assert_eq!(studio.budget, 50_000);
+            assert!(studio.budget_input.is_none());
+        }
+        let _ = studio.update(Message::EditBudget("80000".into()));
+        let _ = studio.update(Message::Budget(1_000_000));
+        let _ = studio.update(Message::ApplyBudget);
+        assert_eq!(studio.budget, 1_000_000);
+    }
+
+    #[test]
     fn navigation_keeps_old_lod_until_matching_replacement_arrives() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("scan.xyz");
@@ -17238,6 +17420,52 @@ mod lod_transition_tests {
     }
 
     #[test]
+    fn selection_exports_exclude_deleted_ordinals_in_all_point_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("original.xyz");
+        std::fs::write(&source, "1 2 3\n4 5 6\n7 8 9\n10 11 12\n").unwrap();
+        let cloud = pointcloud_core::open(&source, 4).unwrap();
+        let pick = |ordinal: usize| {
+            SelectionMask::single(
+                4,
+                IndexedPoint {
+                    ordinal: ordinal as u64,
+                    point: cloud.points[ordinal],
+                },
+            )
+            .unwrap()
+        };
+        let mut deleted = DeletionMask::new(4).unwrap();
+        deleted.apply(&pick(1)).unwrap();
+        let mut selection = pick(1);
+        selection.bits[0] |= 1 << 3;
+        selection.count += 1;
+        for format in ExportFormat::ALL {
+            for selected_only in [true, false] {
+                let expected = if selected_only { vec![10] } else { vec![1, 7] };
+                let path = dir.path().join(format!("copy.{}", format.extension()));
+                let filter = ExportSelection {
+                    mask: &selection,
+                    deleted: Some(&deleted),
+                    selected_only,
+                };
+                let count = filter
+                    .write(&cloud, &path, format, CloudTransform::default(), None)
+                    .unwrap();
+                assert_eq!(count as usize, expected.len());
+                let output = pointcloud_core::open(path, 4).unwrap();
+                let mut xs: Vec<_> = output
+                    .points
+                    .iter()
+                    .map(|point| point.xyz[0].round() as i32)
+                    .collect();
+                xs.sort_unstable();
+                assert_eq!(xs, expected, "{format:?}, selected={selected_only}");
+            }
+        }
+    }
+
+    #[test]
     fn preview_tier_follows_the_nodes_in_view() {
         let directory = tempfile::tempdir().unwrap();
         let (cloud, tree) = leafy_scan(directory.path());
@@ -17286,6 +17514,20 @@ mod lod_transition_tests {
 
         let away = Projection::new(cloud.bounds, 0.0, 1.5, 1.0, [5_000.0, 0.0], 800.0, 600.0);
         assert_eq!(tier(away), None);
+    }
+
+    #[test]
+    fn high_density_finishes_after_a_distant_preview_underfills_the_first_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        let (cloud, tree) = leafy_scan(directory.path());
+        let projection = from_above(&cloud, 8.0);
+        let mut detail = refinement_of(tree, projection, lod_pace::LOD_FIRST_PASS_MIN);
+        detail.budget = 12_000_000;
+        while detail.advance().unwrap().is_some() {}
+        let mut ordinals: Vec<_> = detail.samples[0].iter().map(|p| p.ordinal).collect();
+        ordinals.sort_unstable();
+        assert_eq!(ordinals.len(), cloud.points.len());
+        assert!(ordinals.iter().enumerate().all(|(i, &n)| n == i as u64));
     }
 
     #[test]

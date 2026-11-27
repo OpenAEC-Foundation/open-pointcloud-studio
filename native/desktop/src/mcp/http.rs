@@ -280,7 +280,7 @@ fn handle(mut request: Request, state: &Arc<State>) {
         let mut reply = session.dispatch(message).unwrap_or(Value::Null);
         if reply.get("result").is_some() {
             reply["result"]["instructions"] = Value::from(
-                "These are the desktop application's existing tools with pointcloud_ prefixes. Start the native application in the same configuration directory before calling tools. pointcloud_stand aliases status and pointcloud_opslaan aliases export; file paths refer to the container's mounted filesystem. Use pointcloud_wait_until_idle and pointcloud_wait_for_job for background work."
+                "These are the desktop application's existing tools with pointcloud_ prefixes. Start the native application in the same configuration directory before calling tools. pointcloud_stand aliases status and pointcloud_opslaan aliases export; file paths refer to the container's mounted filesystem. After pointcloud_open, wait for pointcloud_wait_until_idle. To stage a new Docs version, pass a separate absolute output path to pointcloud_opslaan. Wait for its job_id with pointcloud_wait_for_job and collect job.path when job.state is complete."
             );
         }
         if reply.get("error").is_none() {

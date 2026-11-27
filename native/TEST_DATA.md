@@ -1121,6 +1121,27 @@ The rebuilt dev GUI also reopened the public 160,838-point
 [pye57 test scan](../screenshots/native-current-e57-neutral-rgb.png) in RGB mode
 with its four scanner positions visible.
 
+## Measuring exported meshes against a room scan
+
+Use PCL's [room_scan1.pcd](https://github.com/PointCloudLibrary/data/blob/084fa0e260580cc765ded83de4ec3f495f1d6f1e/tutorials/room_scan1.pcd), SHA-256 `52c373a67d8beaa318b5e8c024f06e219f14acc1db28fa7333ff5dc73840428b`. Each report compares the 112,586 measured points to the triangles of the exported OBJ in the scan's original coordinate system.
+
+```sh
+open-pointcloud-studio --mesh room_scan1.pcd terrain.obj
+open-pointcloud-studio --surface room_scan1.pcd surface.obj --max-vertices 5000
+open-pointcloud-studio --closed-mesh room_scan1.pcd closed.obj --voxel 0.20
+for mesh in terrain.obj surface.obj closed.obj; do
+    open-pointcloud-studio --mesh-deviation room_scan1.pcd "$mesh"
+done
+```
+
+| Export | Triangles | Mean (m) | Nearest-rank P95 (m) | Maximum (m) |
+| --- | ---: | ---: | ---: | ---: |
+| Terrain | 10,021 | 0.091599 | 0.372967 | 3.050517 |
+| Surface | 13,363 | 0.022141 | 0.058458 | 5.504753 |
+| Closed mesh | 15,783 | 0.020315 | 0.078777 | 2.616754 |
+
+On 25 November 2026 the independent check decoded the compressed PCD with pypcd4, read the OBJ vertices as float64 and compared all source points to the exported triangles with [Point Cloud Utils 0.34.0](https://fwilliams.info/point-cloud-utils/sections/closest_point_on_mesh/). Compute the mean and maximum of the returned distances and use NumPy's `percentile(distances, 95, method="inverted_cdf")` for P95. All nine distance statistics agreed within 1e-9 m.
+
 ## Generated demo scenes
 
 The pictures that the README, the user guide, the Dutch manual of the wiki

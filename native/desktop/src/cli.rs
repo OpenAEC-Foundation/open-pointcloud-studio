@@ -138,6 +138,27 @@ pub(crate) fn mesh(arguments: &[OsString]) -> Outcome {
     }
 }
 
+/// Report the point-to-surface distances in the common coordinate system of both files.
+pub(crate) fn mesh_deviation(arguments: &[OsString]) -> Outcome {
+    let [source, surface] = arguments else {
+        return Err(usage());
+    };
+    let mesh = pointcloud_core::read_mesh_geometry(surface)
+        .map_err(|error| (1, format!("Cannot read mesh: {error}")))?
+        .ok_or_else(|| (1, "The mesh file contains no triangles".to_owned()))?;
+    let report = pointcloud_core::mesh_source_deviation(&mesh, Path::new(source))
+        .map_err(|error| (1, format!("Mesh deviation failed: {error}")))?;
+    Ok(Some(
+        serde_json::json!({
+            "samples": report.samples,
+            "mean": report.mean,
+            "p95": report.p95,
+            "max": report.max,
+        })
+        .to_string(),
+    ))
+}
+
 /// `--surface INPUT OUTPUT.obj [--max-vertices N] [--neighbors N]
 /// [--edge-factor N] [--mesh-size SIZE]`: a 3D surface through the points.
 pub(crate) fn surface(arguments: &[OsString]) -> Outcome {
