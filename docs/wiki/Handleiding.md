@@ -37,6 +37,18 @@ open-pointcloud-studio autzen-window.laz
 
 Dit voorbeeld haalt 5.197 punten op uit een vlak van 100 × 100 voet in de openbare Autzen-scan in Oregon. Vul voor een eigen scan de URL en de grenzen in het coördinatenstelsel van de bron in. Het eerste paar bevat de kleinste en grootste X, het tweede de kleinste en grootste Y. Alle hoogtes tellen mee.
 
+### Een Studio-export delen als COPC
+
+Exporteer je selectie uit Studio als LAS of LAZ. Met PDAL maak je er een COPC-bestand van voor viewers die via HTTP delen van een scan ophalen. Vervang `survey.laz` in het voorbeeld door je eigen exportbestand. [COPC schrijven met PDAL](https://pdal.io/en/stable/stages/writers.copc.html)
+
+```sh
+pdal translate survey.laz survey.copc.laz --writer=writers.copc --writers.copc.forward=all --writers.copc.extra_dims=all
+pdal info --stats --dimensions=X,Y,Z survey.laz
+pdal info --driver readers.copc --stats --dimensions=X,Y,Z survey.copc.laz
+```
+
+Vergelijk voor elke as het aantal punten, het minimum en het maximum in beide rapporten. Bewaar de oorspronkelijke export als je de originele veldtypen nodig hebt. Zo schreef PDAL 2.10.2 de geschaalde 16-bits AHN6-velden `Amplitude` en `Reflectance` als 64-bits kommagetallen. Alle meetwaarden kwamen in de geteste export overeen. Zet het COPC-bestand voor online gebruik op een server die HTTP-bytebereiken ondersteunt.
+
 ## 3. Punten selecteren en meten
 
 Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De groep SELECTIE heeft **Selecteer** (punt kiezen), **Vak selecteren**, **Selectie wissen**, **Geselecteerde punten verwijderen** en **Selectie exporteren**. **Rechtsklik** in de 3D-weergave opent het contextmenu. **Escape** verlaat het actieve gereedschap en heft ook de selectie op. **Delete** verbergt geselecteerde punten; **Ctrl+Z** en **Ctrl+Y** maken de laatste verwijdering of fotokleuring ongedaan of herhalen die.

@@ -91,6 +91,18 @@ open-pointcloud-studio autzen-window.laz
 
 The example selects a 100 × 100 ft rectangle from the public Autzen survey in Oregon. The four numbers are the minimum and maximum X, followed by the minimum and maximum Y, in the source coordinate system. All elevations are included. The selection contains 5,197 points. Use your survey’s URL, coordinate units and bounds for your own data. The writer options carry the source header settings and extra point dimensions into the local LAS/LAZ file. [PDAL LAS writer options](https://pdal.io/en/stable/stages/writers.las.html)
 
+### Share a Studio export as COPC
+
+Export your selection from Studio as LAS or LAZ. To share it with a viewer that reads parts of a survey over HTTP, use PDAL to build the COPC file. In the example below, replace `survey.laz` with your export. [PDAL COPC writer](https://pdal.io/en/stable/stages/writers.copc.html)
+
+```sh
+pdal translate survey.laz survey.copc.laz --writer=writers.copc --writers.copc.forward=all --writers.copc.extra_dims=all
+pdal info --stats --dimensions=X,Y,Z survey.laz
+pdal info --driver readers.copc --stats --dimensions=X,Y,Z survey.copc.laz
+```
+
+Compare the point count, minimum and maximum for each axis in the two reports. Keep the original export if you need the original field types. For example, PDAL 2.10.2 wrote the scaled 16-bit AHN6 fields `Amplitude` and `Reflectance` as 64-bit floating-point values. All measured values matched in the tested export. To serve the COPC online, use a host that supports HTTP byte ranges.
+
 ### What appears first
 
 - **LAS and LAZ** open from their header at once, with a sample of points taken from places spread through the file. When the points of such a file cannot be read, the scan is closed again with the reason in the status bar; one with an index kept from before stays open, from that index.
