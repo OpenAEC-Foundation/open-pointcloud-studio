@@ -46,6 +46,7 @@ fn disk_caches_are_off_until_the_caller_turns_them_on() {
     fs::create_dir(&cache).unwrap();
     // Before the first call of the library, while this is the only thread
     // that does anything.
+    std::env::remove_var("OPS_INDEX_DIR");
     std::env::set_var("XDG_CACHE_HOME", &cache);
 
     let first = folder.path().join("first.xyz");

@@ -120,8 +120,8 @@ pub use obj_mesh::{
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
 pub use octree::{
-    disk_caches, set_disk_caches, IndexConfig, IndexProgress, IndexStage, IndexedNode,
-    IndexedPoint, OctreeIndex,
+    disk_caches, minimum_index_bytes, set_disk_caches, IndexConfig, IndexProgress, IndexStage,
+    IndexedNode, IndexedPoint, OctreeIndex,
 };
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;

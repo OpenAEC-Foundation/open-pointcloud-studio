@@ -129,6 +129,9 @@ Drags continue when the pointer leaves the scene. Survey coordinates such as nat
 
 - **COLOR**: **RGB**, **Elevation**, **Intensity** and **Class** choose the colours. A mode that no visible cloud has values for is dimmed; a cloud without stored colours or intensity is drawn in a neutral grey in that mode while another cloud has them.
 - **DETAIL**: **Point size** sets the point size from 0.1 to 20, and **Points in view** the point budget: the most points drawn at once, from 1,000 to 50,000,000 in steps of 100,000. Higher settings use more system and graphics memory. When the budget exceeds ten million and all visible octree leaves fit the indexed layer’s share, the viewer reads all visible points from those leaves. For scans larger than the budget, build the octree and zoom or use a section box to concentrate detail in the area of interest.
+
+See [index storage](#index-storage) to estimate disk use or select another volume.
+
 - **Eye-dome** switches eye-dome lighting on or off: a shading by depth that makes edges and relief visible. While it is on, Properties has its **Strength**, from 0 to 5.
 - **Scan positions** shows or hides the station markers.
 
@@ -1190,14 +1193,29 @@ When the environment variable `XDG_CONFIG_HOME` is set, on any system, the folde
 | `camera-views.json`, `view-snapshots/` | The saved views of every scan and their snapshots |
 | `instances/` | The discovery file of each running window, for the [command API](../native/API.md) |
 
-Indexes are in the folder `open-pointcloud-studio/indexes`:
+### Index storage
+
+Properties shows the minimum space for the active scan’s index. Each point takes 40 bytes in the leaf files, so 100 million points require at least 4 GB. Previews, filesystem overhead and temporary build files need additional space.
+
+While splitting a node, Studio writes its children before removing the parent. Allow room for that temporary copy. These measurements used a Linux tmpfs with 4 KiB blocks and the default index settings. Sizes are rounded to decimal MB.
+
+| Scan | Points | Leaf records | Completed index on disk | Free space needed to build |
+| --- | ---: | ---: | ---: | ---: |
+| PCL room (PCD) | 112,586 | 4.50 MB | 5.01 MB | 9.10 MB |
+| AHN6 survey crop (LAZ) | 313,232 | 12.53 MB | 14.42 MB | 25.16 MB |
+
+The space needed depends on the point distribution, index settings and filesystem. If indexing reports a full disk, free space on the index volume and retry. Studio removes the unfinished build and keeps completed indexes. [Validation results](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/68)
+
+To put persistent indexes and cached previews on a different volume, set `OPS_INDEX_DIR` to an absolute, writable directory dedicated to Studio before launch. On Linux, for example, use `OPS_INDEX_DIR=/mnt/survey-cache open-pointcloud-studio`. On Windows you can use a local drive or a UNC path. Changing the folder starts a separate cache. Existing files stay in their original folder.
+
+An unset, empty or relative value uses the normal cache location:
 
 | System | Folder |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\open-pointcloud-studio\indexes` |
 | Linux and macOS | `~/.cache/open-pointcloud-studio/indexes` |
 
-When `XDG_CACHE_HOME` is set, the folder is `$XDG_CACHE_HOME/open-pointcloud-studio/indexes`. The folder can be deleted while the application is closed; the indexes are built again when the scans are opened.
+For the normal cache location, when `XDG_CACHE_HOME` is set, the folder is `$XDG_CACHE_HOME/open-pointcloud-studio/indexes`. The folder can be deleted while the application is closed; the indexes are built again when the scans are opened.
 
 Nothing is written beside the scans, and the scans themselves are never changed.
 

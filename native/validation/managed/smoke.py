@@ -90,6 +90,7 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
            "OPENAEC_MAP": str(work), "OPENAEC_TAAL": "en", "OPENAEC_THEMA": "dark",
            "OPENAEC_MCP_POORT": str(port), "OPENAEC_MCP_GEHEIM": secret,
            "OPENAEC_MCP_ADRES": "127.0.0.1"}
+    env.pop("OPS_INDEX_DIR", None)
     if args.paused_access:
         settings = directory / "config/open-pointcloud-studio-native/settings.json"
         settings.parent.mkdir(parents=True)

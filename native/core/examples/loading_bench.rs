@@ -10,7 +10,7 @@
 //!
 //! `write` makes synthetic E57 station scans in DIR. The other two read every
 //! `.e57` file in DIR and keep their caches in a new folder inside it, so
-//! nothing lands in the user's cache folder; delete DIR afterwards.
+//! each run measures a fresh application cache, including with OPS_INDEX_DIR set.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,11 +58,13 @@ fn scans_in(dir: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 }
 
 /// A new cache folder inside DIR for the caches of one run.
-fn fresh_cache(dir: &Path, name: &str) -> PathBuf {
-    let cache = dir.join(format!("cache-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&cache);
-    std::fs::create_dir_all(&cache).expect("cache folder");
-    cache
+fn fresh_cache(dir: &Path) -> std::io::Result<tempfile::TempDir> {
+    let cache = tempfile::Builder::new()
+        .prefix("loading-bench-")
+        .tempdir_in(dir.canonicalize()?)?;
+    std::env::set_var("OPS_INDEX_DIR", cache.path());
+    std::env::set_var("XDG_CACHE_HOME", cache.path());
+    Ok(cache)
 }
 
 /// Station scans of a room seen from its middle: a sweep of columns from
@@ -192,8 +194,7 @@ fn write_scans(dir: &Path, scans: usize, points: usize) -> Result<(), Box<dyn st
 fn open_all(dir: &Path, steps: bool) -> Result<(), Box<dyn std::error::Error>> {
     let scans = scans_in(dir)?;
     // The caches of an earlier run would make this one skip decoding.
-    let cache = fresh_cache(dir, if steps { "steps" } else { "plain" });
-    std::env::set_var("XDG_CACHE_HOME", &cache);
+    let _cache = fresh_cache(dir)?;
     let started = Instant::now();
     let first_points = Arc::new(Mutex::new(None::<Duration>));
     let snapshots = Arc::new(AtomicUsize::new(0));
@@ -239,15 +240,15 @@ fn open_all(dir: &Path, steps: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
     let first = first_points.lock().unwrap().unwrap_or_default();
     println!(
-        "open {}: {} scans, {} points, all open after {:.2}s, first points after {:.2}s, {} snapshots",
+        "open {}: {} scans, {} points, all open after {:.2}s, first points after {:.2}s, {} snapshots, peak memory {}",
         if steps { "steps" } else { "plain" },
         scans.len(),
         points,
         slowest.as_secs_f64(),
         first.as_secs_f64(),
-        snapshots.load(Ordering::Relaxed)
+        snapshots.load(Ordering::Relaxed),
+        peak_memory_label()
     );
-    let _ = std::fs::remove_dir_all(&cache);
     Ok(())
 }
 
@@ -255,15 +256,14 @@ fn open_all(dir: &Path, steps: bool) -> Result<(), Box<dyn std::error::Error>> {
 /// indexes the scans it opened: each build reads its source again.
 fn index_all(dir: &Path, at_once: usize) -> Result<(), Box<dyn std::error::Error>> {
     let scans = scans_in(dir)?;
-    let cache = fresh_cache(dir, &format!("index{at_once}"));
-    std::env::set_var("XDG_CACHE_HOME", &cache);
+    let cache = fresh_cache(dir)?;
     let clouds: Vec<Arc<PointCloud>> = scans
         .iter()
         .map(|path| pointcloud_core::open(path, SAMPLE_LIMIT).map(Arc::new))
         .collect::<Result<_, _>>()?;
     let queue = Arc::new(Mutex::new(clouds.clone()));
     let config = IndexConfig {
-        scratch_dir: Some(cache.join("indexes")),
+        scratch_dir: Some(cache.path().join("indexes")),
         ..IndexConfig::default()
     };
     let started = Instant::now();
@@ -294,19 +294,25 @@ fn index_all(dir: &Path, at_once: usize) -> Result<(), Box<dyn std::error::Error
     let total = started.elapsed();
     let mean = builds.iter().sum::<Duration>() / builds.len().max(1) as u32;
     println!(
-        "index {} at once: {} scans in {:.2}s, {:.2}s per build on average, peak memory {} MB",
+        "index {} at once: {} scans in {:.2}s, {:.2}s per build on average, peak memory {}",
         at_once,
         builds.len(),
         total.as_secs_f64(),
         mean.as_secs_f64(),
-        peak_memory_mb()
+        peak_memory_label()
     );
-    let _ = std::fs::remove_dir_all(&cache);
     Ok(())
 }
 
+fn peak_memory_label() -> String {
+    match peak_memory_bytes() {
+        Some(bytes) => format!("{:.1} MB", bytes as f64 / 1_000_000.0),
+        None => "unavailable".into(),
+    }
+}
+
 #[cfg(windows)]
-fn peak_memory_mb() -> u64 {
+fn peak_memory_bytes() -> Option<u64> {
     #[repr(C)]
     #[derive(Default)]
     struct Counters {
@@ -333,14 +339,26 @@ fn peak_memory_mb() -> u64 {
     // SAFETY: the counters are a properly sized and aligned structure of the
     // layout the function fills.
     let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.size) };
-    if ok == 0 {
-        0
+    (ok != 0).then_some(counters.peak_working_set as u64)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn peak_memory_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::uninit();
+    // SAFETY: getrusage initializes the structure on success.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let peak = u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).ok()?;
+    // Linux reports KiB, macOS reports bytes.
+    if cfg!(target_os = "linux") {
+        peak.checked_mul(1024)
     } else {
-        counters.peak_working_set as u64 / 1_000_000
+        Some(peak)
     }
 }
 
-#[cfg(not(windows))]
-fn peak_memory_mb() -> u64 {
-    0
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+fn peak_memory_bytes() -> Option<u64> {
+    None
 }
