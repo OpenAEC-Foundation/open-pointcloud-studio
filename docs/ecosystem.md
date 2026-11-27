@@ -2,7 +2,27 @@
 
 This is the record of issue [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33): what Open Pointcloud Studio delivers for each system, the library and the service it offers besides the desktop application, how its MCP servers, its interface, its signatures and its cloud deployment stand, and for each requirement of the issue which check proves it and what is still open.
 
-The current verified stable release is [2026.45.1](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.45.1), published on 3 November 2026. The original 25 October audit below is historical evidence; its uncompleted publication steps are superseded only where the current record proves them.
+The current verified stable release is [2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/tag/v2026.48.0), published on 25 November 2026.
+
+## Published SDK compatibility, checked 26 November 2026
+
+A C11 program built with the published 2026.45.1 SDK ran unchanged with the 2026.48.0 library on Windows x64, macOS Intel and Apple silicon, and Linux amd64 and arm64. Each native runner verified both archive checksums, compiled the older SDK’s `examples/inspect.c` once and ran it with each release’s shared library. The program reported the loaded release version and ABI 1.0 in each run. Its executable SHA-256 stayed the same across the library swap.
+
+On both releases the program read 1,000 points, received `OPS_ERROR_LIMIT` for an oversized export, exported 500 points to LAZ and read all 500 back through the index. The [five-platform run](https://github.com/boazeggs/open-pointcloud-studio/actions/runs/45753235614) records the archive and executable hashes. The [test script](https://github.com/boazeggs/open-pointcloud-studio/blob/0d22a882856cf7bde9793095d530d18c1397ec20/scripts/check-published-sdk-client.py) includes the compiler commands and the runtime library names for each platform.
+
+## Published evidence, checked 25 November 2026
+
+The release runners verified the downloaded Windows, macOS and Linux packages and SDK libraries. The Windows Authenticode checks passed for publisher Impertio Studio B.V. The macOS checks passed on Intel and Apple silicon for Developer ID team `7KFV4QY98M`. The Linux runner verified the OpenPGP signatures on the checksum manifest and both AppImages. It also pulled the attested API image with digest `sha256:ee66ea26689a1f71eeb891be00661f97fa3d7dcdc8f08d5087cdb7d8082f089d`. See the [published verification record](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/open-pointcloud-studio_2026.48.0_verification.md) and [release run](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/45540574535).
+
+A separate Linux amd64 check compiled the C11 example against the published SDK header and shared library outside the repository. It read 1,000 fixture points, checked that an export over its configured limit returned `OPS_ERROR_LIMIT`, exported 500 points and read all 500 back through the index. To reproduce this from the extracted [SDK archive](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/open-pointcloud-studio-sdk_2026.48.0_linux-amd64-so.tar.gz), run:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/inspect.c -Llib -lops_pointcloud -o inspect
+mkdir -p sample-output
+LD_LIBRARY_PATH="$PWD/lib" ./inspect sample-output
+```
+
+The OpenAEC Installer update manifest includes minisign signatures for the Windows x64 installer and both Linux AppImages. The [command-line client check](#ai-assistant-clients) covers discovery, reading, thinning and undo. The desktop-client check, interactive confirmation, AWS deployment smoke test and full UI component parity remain open under [#33](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33). See the [versioned update manifest](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json).
 
 ## Published evidence, checked 5 November 2026
 
@@ -17,7 +37,7 @@ The [published verification record](https://github.com/OpenAEC-Foundation/open-p
 | Headless API image | Published digest `sha256:417e869953dac1584dbf185149cc15e69a1664326aa9a44f00e05c8108120a14`; attestation, pull and version passed | A local/container test does not establish deployment in AWS |
 | Claude clients, UI parity and AWS | Existing setup/contracts remain below | Live Claude Desktop/Code checks, full component parity and deployed AWS smoke evidence remain open |
 
-Publication now requires all five platform signing proofs; draft-only warnings are not permission to publish. Updater minisign integration remains tracked separately in #40. This update provides current evidence for #33 and #39 without declaring their remaining acceptance points complete.
+Publication now requires all five platform signing proofs; draft-only warnings are not permission to publish. At the time of this check, updater minisign integration was tracked separately in #40.
 
 ## Contents
 
@@ -47,23 +67,26 @@ The evidence of record comes from the published tag run of a release: its jobs, 
 
 ## Capability matrix
 
-The supported stable version in this matrix is 2026.45.1. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
+The supported stable version is 2026.48.0. As of 27 November 2026, GitHub listed 19 published releases and marked none as a prerelease. The experimental ARM64 desktop and preview cloud API ship under the stable tag. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
 
 | Delivered as | System or runtime | Processors | Status | Version | Since | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 2026.45.1 published | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
+| Installer `_x64-setup.exe` and zip `_windows-x64.zip` | Windows 10 and 11 | x64 | stable | 2026.48.0 published | installer 0.6.0, these names 0.8.0 | Packages `windows`; Release `verify-release` (windows) |
 | Disk image `.dmg` and archive `_macos-universal.tar.gz` | macOS 11 and later | arm64 and x86-64 in one file | stable | as above | 0.8.0 | Packages `macos`, `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `.deb`, AppImage and `_linux-amd64.tar.gz` | Linux with a C library of version 2.35 or newer, the C++ runtime of GCC 12 or newer, X11 or Wayland | amd64 | stable | as above | 0.8.0 | Packages `verify-linux`; Release `verify-release` (linux) |
 | `_arm64.deb`, `_arm64.AppImage` and `_linux-arm64.tar.gz` | as above | arm64 | experimental: built and tested on build machines with software rendering only | as above | 0.8.0 | Packages `verify-linux` (arm64) |
 | Command-line modes (`--export`, `--section`, `--drawing` and the others) | in every desktop package, without a window | as the package | stable | as above | 0.4.0 | `cli_help.rs`; `smoke-test.sh` in the Packages workflow |
-| Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 11 in 2026.43.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
+| Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 18 in 2026.48.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
 | MCP over standard input and output (`--mcp`) | in every desktop package | as the package | stable | as above | 0.7.0 | Packages `verify-linux`, step *External MCP client* |
-| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.45.1 published | by 2026.45.1 | SDK `windows` |
+| Managed desktop with MCP over Streamable HTTP (`--mcp-http`) | Linux with a running Studio window | amd64, arm64 | tested on the released native packages | 2026.48.0 published | by 2026.48.0 | Both AppImages opened a 12-million-point scan and reopened its edited layer. [Package test](https://github.com/boazeggs/open-pointcloud-studio/actions/runs/45965230726) |
+| C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.48.0 published | by 2026.45.1 | SDK `windows` |
 | `libops_pointcloud.dylib` | macOS 11 and later | arm64 and x86-64 in one file | new | as above | as above | SDK `macos`, `macos-x86_64`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `libops_pointcloud.so.1` | Linux with a C library of version 2.35 or newer | amd64, arm64 | new | as above | as above | SDK `linux` |
 | Rust crate `pointcloud-core`, entry point `pointcloud_core::ops` | by the git tag `vYYYY.W.N`; tested on Linux, Windows and macOS | any the core builds for | new; no semantic versioning beyond the one-release notice of [Compatibility](library.md#compatibility) | as above | as above | CI `native`; SDK `linux` (amd64), step *Build and run the Rust consumer* |
 | Container image of the cloud API, `ghcr.io/openaec-foundation/open-pointcloud-studio-api` | Linux containers | amd64 | preview, until it has passed its smoke test in the cloud deployment | as above | as above | Container `image`; Release `image`, `verify-release` (linux) |
 | MCP over Streamable HTTP (`POST /mcp` of the cloud API) | in the image | amd64 | preview, with the image | as above | as above | Container `image`, step *External MCP client* |
+
+The 27 November binary inspection covered the Studio and CAD executables and the C SDK in the published archives. The Windows files contain AMD64 PE headers. On macOS, each file contains Intel and Apple silicon slices with a deployment target of 11.0. On Linux, the x86-64 and AArch64 binaries each require glibc symbols through GLIBC_2.35. The release job pulled the API image by digest. An anonymous GHCR pull-token request returned HTTP 401 on 27 November. The AWS template accepts a registry secret through `RegistryCredentialsSecretArn`. [Versioned evidence](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33#issuecomment-7217084160) · [AWS parameters](../deploy/aws/README.md#parameters)
 
 What is not delivered or does not apply, and why:
 
@@ -73,14 +96,14 @@ What is not delivered or does not apply, and why:
 | WebAssembly or a browser edition | not delivered | A desktop tool with a GPU view of scans of many gigabytes on local disks. The frozen `classic/` prototype is no supported edition |
 | Android or iOS | not delivered | The same reason |
 | Web view runtime | not applicable | The window is drawn by the application itself and uses no web view, so no web view runtime is installed or carried |
-| Native in-app updater | not delivered | Native releases are downloaded from the release page. The separate OpenAEC Installer manifest/minisign integration is tracked in [#40](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/40) and [#53](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/pull/53) |
+| Native in-app updater | not delivered | Native releases are downloaded from the release page. The separate OpenAEC Installer consumes the published [signed package entries](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/releases/download/v2026.48.0/latest.json) |
 | Image for arm64 | not delivered | Deferred; the image and the prepared deployment are for Linux on x86-64 |
 | Installable MCP bundle | not delivered | Deferred; a client starts the desktop server from its configuration ([Starting it from a client](../native/MCP.md#starting-it-from-a-client)) |
 | Interactive MCP app or connector | not delivered | Tracked under [style book #9](https://github.com/OpenAEC-Foundation/OpenAEC-style-book/issues/9) |
 
 ## Clean machines
 
-The following table preserves the 25 October 2026 test plan and results known at that time. Its “not run yet” entries are historical; the completed v2026.45.1 platform checks are recorded under [Published evidence](#published-evidence-checked-5-november-2026).
+The following table preserves the 25 October 2026 test plan and results known at that time. Its “not run yet” entries are historical; the latest platform checks are recorded under [Published evidence for 2026.48.0](#published-evidence-checked-25-november-2026).
 
 | Job | Machine | What it does | Result |
 | --- | --- | --- | --- |
@@ -123,7 +146,7 @@ Evidence:
 - Local: `check-exports.sh` on the DLL built with the GNU target: "15 functions, as the header declares". `examples/inspect.c` built with `gcc` 15.2 (MinGW-w64) and `-std=c11 -Wall -Wextra -Wpedantic -Werror` gave no warning, and ran with exit code 0: `ops_pointcloud 2026.43.0, ABI 1.0: 1000 points read, 500 exported, 500 read through an index of 1 nodes`. The header passed `clang` 19 with `-Wconversion -Wsign-conversion -Werror`, and as C++17. `native/sdk/packaging/test-sdk-packaging.sh`: 32 ok.
 - Local, earlier on 25 October 2026 in the review of the library, on the same library source: the DLL for the `x86_64-pc-windows-msvc` target with the static runtime, the example built with `cl /W4 /WX` and run against a locally packed archive, and the Rust consumer built without `--locked` and run.
 - CI: CI `native`, steps *Test Rust workspace* (Linux, Windows, macOS) and *Check the core without default features* (Linux). SDK `linux` (amd64 and arm64): the soname, the exports, the C library baseline, the archive, and the example against the unpacked archive and linked statically; on amd64 also *Test the SDK packaging scripts* and *Build and run the Rust consumer*, and on `main` *Build the Rust consumer from the repository by its git address*. SDK `windows`: the static runtime, *Check the runtime dependencies*, the exports, the version details, the example with `cl.exe`, *Sign the DLL* and *Report the signatures*. SDK `macos` and `macos-x86_64`: universal, the oldest macOS, *Sign and notarize the library*, the exports, the example on both processor types. Release `verify-release`: the example against the published macOS archive on both processor types, and the attestations of the published Linux archives.
-- Open: the list of DLLs that "a build of this version loads" in [docs/library.md](library.md#windows) is checked against the first run of SDK `windows`.
+- The [Windows SDK job for 2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/actions/runs/45540574535/job/138957917529) ran `dumpbin /dependents` on the x64 DLL. It reported the four system dependencies listed in the [Windows library documentation](library.md#windows).
 
 ## Cloud API
 
@@ -192,12 +215,16 @@ Evidence:
 
 What is delivered is configuration only: for the desktop server the configuration in the [README](../README.md#mcp-server) and in [Starting it from a client](../native/MCP.md#starting-it-from-a-client), for the cloud server the one in [MCP client](cloud-api.md#mcp-client). There is no installable bundle and no interactive connector.
 
-The connection is checked once with a desktop AI assistant client and once with a command-line AI assistant client, with the owner, in this order: the configuration file used, the transport, the count of the first `tools/list`, one read-only call (`status`), one destructive call (`thin`) confirmed in the client, `undo_delete`, the result and the date. The names of the clients go in the comment on the issue, not here. The client of CI is the reference SDK, not an assistant client, so CI does not prove this.
+The connection is checked once with a desktop AI assistant client and once with a command-line AI assistant client, with the owner, in this order: the configuration file used, the transport, the count of the first `tools/list`, one read-only call (`status`), one destructive call (`thin`) confirmed in the client, `undo_delete`, the result and the date. The issue comment identifies the client versions. CI separately exercises the reference MCP SDK.
 
 | Client | Configuration | Transport | `tools/list` | Read-only call | Destructive call | `undo_delete` | Result | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | a desktop AI assistant client | | | | | | | not done | |
-| a command-line AI assistant client | | | | | | | not done | |
+| a command-line AI assistant client | Project-local stdio entry and isolated test configuration | stdio | 170 distinct tools | `status` identified the 42-point fixture | `thin` with `percent=50` left 21 points | Restored all 42 | Data and undo verified. Interactive confirmation remains open | 25 November 2026 |
+
+On Linux amd64 the official command-line client 2.1.332 connected to the checksum-verified 2026.48.0 release binary. The host tool catalogue matched the names in the release server’s `tools/list` response exactly. A separate Studio window loaded a synthetic 7 × 6 grid. The client executed `status → thin → status → undo_delete → status` against that window. The source file’s SHA-256 digest was identical before and after the sequence.
+
+The test used a loopback Messages API fixture to supply a fixed sequence of tool requests, with the three tools pre-authorized for this test. The client connected to the real Studio server and returned its tool results. An interactive approval by a user and a hosted model session were outside this run. The [client setup instructions](../native/MCP.md#starting-it-from-a-client) include the commands to register the server and check a scan.
 
 ## UI and the OpenAEC Style Repo
 
@@ -220,33 +247,44 @@ The gap, checked on 25 October 2026 by comparing `214c01a` with `main` of the St
 | `openaec-icons`, the B2 icon set | not adopted | A crate added after the copy was taken |
 | The colours of the 3D scene, of drawings and of sheets; the adaptive ribbon; the panels of the application | local | The domain of this application |
 
-Evidence:
+### Verification against the 2026.48.0 release
 
-- Local: the tests of `native/ui`, 21 passed. The review baselines are the software renders [native/design/pointcloud-shell-light.png](../native/design/pointcloud-shell-light.png) and [native/design/pointcloud-shell-forge.png](../native/design/pointcloud-shell-forge.png).
-- Not run for this record: `scripts/check_portable_ui.py` of the Style Repo against `214c01a` and against `main`. It needs a clone of the Style Repo, which the development machine does not have; its output and date go here once it has run.
-- CI: none. A check of the copy in CI is deferred.
-- The requirement stays open on the gap: the current packages of the Style Repo are not adopted.
+On 25 November 2026 the upstream checker ran against the tagged Studio source and both Style Repo revisions below. Both runs exited with status 1 at `Portable README.md differs`. The checker stops at that first difference. Studio documents its own integration in the crate README. The following independent comparison includes subdirectories under `src/` as well as the assets and licenses. [Upstream checker](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/blob/2eb8a958bbfe864dea81237e8890cf2405620b7d/scripts/check_portable_ui.py)
+
+| Compared with Studio 2026.48.0 | Snapshot base, `214c01a` | Style Repo main on 25 November, `2eb8a95` |
+| --- | --- | --- |
+| Packaged assets, compared by relative path and bytes | All 150 match | All 150 match. Upstream adds five font files and a font manifest |
+| Files under `licenses/` | All five match | All five match. Upstream adds two font license files |
+| Rust sources, normalized with rustfmt (edition 2021) | 16 of 22 match | One of the 22 shared paths matches. Upstream has 22 further Rust files |
+| Values in `src/tokens.rs` | All 77 named RGBA values match in each of the five themes | The same 385 values match |
+| iced dependency | Both pin 0.13.1 | Upstream pins 0.14.0 |
+
+The upstream repository advanced 259 commits from the snapshot base. To reproduce the checker result, place a clean `open-pointcloud-studio` checkout at tag `v2026.48.0` next to the Style Repo checkout. In the latter, check out each revision in turn and run `python3 scripts/check_portable_ui.py`. [Snapshot base](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/tree/214c01a8758850f165f0d620312f8863c5a84ea6/crates/openaec-ui) · [Compared upstream revision](https://github.com/OpenAEC-Foundation/OpenAEC-Style-Repo/tree/2eb8a958bbfe864dea81237e8890cf2405620b7d/crates/openaec-ui) · [Studio release source](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/tree/v2026.48.0/native/ui)
+
+The published Linux amd64 AppImage rendered all five themes under headless Wayland with Mesa lavapipe in an isolated profile. Each `set_theme` call was checked with `status` and a full-window `screenshot`. In each 1278 × 693 image, the most frequent RGB on rows 18, 85, 164 and 680 matched the corresponding title, ribbon, document and status backgrounds (`bg_lighter`, `bg`, `docbar_bg`, `status_bg`). All 20 comparisons passed. After a process restart, `status` still reported the last selected theme, High contrast. In the tagged source, all 21 tests passed with `cargo test --locked -p openaec-ui` from `native/`.
+
+This establishes theme rendering on the sampled bands. Adoption of the newer component APIs and verification of the remaining controls are still open. The existing software-rendered shell baselines cover [Light](../native/design/pointcloud-shell-light.png) and [Forge](../native/design/pointcloud-shell-forge.png).
 
 ## Signing per file
 
-Public publication requires verified signing outputs for the Windows application/installer, Windows SDK library, macOS application/disk image, macOS SDK library and Linux OpenPGP manifest. `require-signatures.sh` runs after signing and before the release draft is created or updated; a missing, false or malformed output fails publication even when all platform credentials are absent. An explicit draft-only run warns for every missing proof and cannot publish. The release workflow subsequently checks the downloaded files with the commands of this table, in `verify-release`. This gate establishes policy; the real publisher identities and cryptographic checks still require a successful organisation-signed release run.
+Public publication requires verified signing outputs for the Windows application/installer, Windows SDK library, macOS application/disk image, macOS SDK library and Linux OpenPGP manifest. `require-signatures.sh` runs after signing and before the release draft is created or updated; a missing, false or malformed output fails publication even when all platform credentials are absent. An explicit draft-only run warns for every missing proof and cannot publish. The release workflow subsequently checks the downloaded files with the commands of this table, in `verify-release`. The [2026.48.0 release evidence](#published-evidence-checked-25-november-2026) records the results.
 
-The last column is filled in from the first signed tag run; the verification record lists the same identities.
+The last column lists identities from the 2026.48.0 verification record.
 
 | Files | Signature | Check, as a user | Expected | CI | Identity |
 | --- | --- | --- | --- | --- | --- |
-| `open-pointcloud-studio.exe`, `OpenCADStudio.exe`, `_x64-setup.exe`, `ops_pointcloud.dll` | Authenticode through the organisation's code-signing account, SHA-256, RFC 3161 timestamp | `Get-AuthenticodeSignature FILE \| Format-List *` | `Status` `Valid`, `TimeStamperCertificate` set | Packages `windows` and SDK `windows`, *Report the signatures*; Release `verify-release` (windows) | subject and thumbprint: not recorded yet |
-| `Open Pointcloud Studio.app` and the `.dmg` | Developer ID Application of the organisation, hardened runtime, timestamp; notarized, ticket stapled | `codesign -dvv --verbose=4 FILE`; `spctl --assess --type execute -vv "Open Pointcloud Studio.app"`; `spctl -a -t open --context context:primary-signature -v FILE.dmg`; `xcrun stapler validate FILE.dmg` | `Authority=Developer ID Application`; accepted, `source=Notarized Developer ID`; the ticket validates | Packages `macos`, *Report the signatures*; `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) | Team ID: not recorded yet |
+| `open-pointcloud-studio.exe`, `OpenCADStudio.exe`, `_x64-setup.exe`, `ops_pointcloud.dll` | Authenticode through the organisation's code-signing account, SHA-256, RFC 3161 timestamp | `Get-AuthenticodeSignature FILE \| Format-List *` | `Status` `Valid`, `TimeStamperCertificate` set | Packages `windows` and SDK `windows`, *Report the signatures*; Release `verify-release` (windows) | Impertio Studio B.V., `7351D01DA9D2044A2C510A5EA68921E07126D48A` |
+| `Open Pointcloud Studio.app` and the `.dmg` | Developer ID Application of the organisation, hardened runtime, timestamp; notarized, ticket stapled | `codesign -dvv --verbose=4 FILE`; `spctl --assess --type execute -vv "Open Pointcloud Studio.app"`; `spctl -a -t open --context context:primary-signature -v FILE.dmg`; `xcrun stapler validate FILE.dmg` | `Authority=Developer ID Application`; accepted, `source=Notarized Developer ID`; the ticket validates | Packages `macos`, *Report the signatures*; `verify-macos`; Release `verify-release` (macos-arm64, macos-x86_64) | Team `7KFV4QY98M` |
 | The binaries in `_macos-universal.tar.gz` | Developer ID Application, hardened runtime, timestamp; not notarized on their own | `codesign -dvv --verbose=4 FILE` | `Authority=Developer ID Application` | Packages `macos`; Release `verify-release` (macos-arm64, macos-x86_64) | as above |
 | `libops_pointcloud.dylib` | Developer ID Application, hardened runtime, timestamp; notarized (a library cannot be stapled; the notary service keeps the ticket) | `codesign -dvv --verbose=4 lib/libops_pointcloud.dylib` | `Authority=Developer ID Application`; the notarytool record says `Accepted` | SDK `macos`, *Sign and notarize the library*; Release `verify-release` (macos-arm64, macos-x86_64) | as above |
-| `.deb`, `.AppImage`, `_linux-*.tar.gz` and the two Linux archives of the C library | build attestation through Sigstore, kept by GitHub | `gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` | verified; the output names the tag | Release `publish`, *Attest the Linux packages*; `verify-release` (linux) | signer workflow: not recorded yet |
+| `.deb`, `.AppImage`, `_linux-*.tar.gz` and the two Linux archives of the C library | build attestation through Sigstore, kept by GitHub | `gh attestation verify FILE --repo OpenAEC-Foundation/open-pointcloud-studio --signer-workflow OpenAEC-Foundation/open-pointcloud-studio/.github/workflows/release.yml` | verified; the output names the tag | Release `publish`, *Attest the Linux packages*; `verify-release` (linux) | `.github/workflows/release.yml@refs/tags/v2026.48.0` |
 | `SHA256SUMS` | the checksums of every package and archive of the release, always | `sha256sum --ignore-missing -c SHA256SUMS` | `OK` for each file downloaded | Release `publish`, *Write SHA256SUMS*; `verify-release` (linux) | none |
-| `SHA256SUMS.asc` and an `.asc` for each AppImage | OpenPGP, detached and armoured, by the organisation's key; **off until that key exists** | `gpg --verify SHA256SUMS.asc SHA256SUMS` | a good signature by the published fingerprint | Release `publish`, *Sign SHA256SUMS and the AppImages*; `verify-release` (linux) | no key yet |
+| `SHA256SUMS.asc` and an `.asc` for each AppImage | OpenPGP, detached and armoured, by the organisation's key | `gpg --verify SHA256SUMS.asc SHA256SUMS` | a good signature by the published fingerprint | Release `publish`, *Sign SHA256SUMS and the AppImages*; `verify-release` (linux) | `13F6D414ADEE4ED4CD09AC60601D86C93C504D29` |
 | Every file | a `.sha256` beside it | `sha256sum -c FILE.sha256` | `OK` | Release `publish`, *Check that the release is complete* | none |
-| The image | pushed by its digest; build attestation, stored with the image in the registry | `gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@sha256:DIGEST --repo OpenAEC-Foundation/open-pointcloud-studio` | verified; `docker pull` by the version gives that digest | Release `image`, *Attest the image*; `verify-release` (linux) | digest: not recorded yet |
-| An updater | not applicable: there is none | | | | |
+| The image | pushed by its digest; build attestation, stored with the image in the registry | `gh attestation verify oci://ghcr.io/openaec-foundation/open-pointcloud-studio-api@sha256:DIGEST --repo OpenAEC-Foundation/open-pointcloud-studio` | verified; `docker pull` by the version gives that digest | Release `image`, *Attest the image*; `verify-release` (linux) | [2026.48.0 image digest](#published-evidence-checked-25-november-2026) |
+| Windows installer and Linux AppImages offered by OpenAEC Installer | Detached minisign signatures | See the versioned `latest.json` and package `.sig` files | Valid package signatures | Release workflow | OpenAEC Installer update key |
 
-Evidence:
+Historical evidence from the October audit:
 
 - Local: `bash native/packaging/test-scripts.sh` passed, 86 ok: the release notes with and without the digest of the image, an OpenPGP signature and signed libraries; pruning a draft while keeping the signatures; `signature-assets.sh`; `sign-linux.sh` without a key (it signs nothing and says so), with a throwaway key (it signs and verifies) and with a wrong fingerprint (refused). In the review of the release wiring, a key exported as a signing subkey only signed and verified with either fingerprint, and `actionlint` 1.7.12 found nothing in the six workflows of `386c863`.
 - Earlier releases: the notes of 0.9.5 say that its installer and application carry a valid code signature, as the run that built them found. This record has not checked the published 0.9.5 files itself. The macOS files of 0.9.5 are signed ad hoc and not notarized.
@@ -331,13 +369,11 @@ Volume ownership:  /work and /work/tmp writable by user 10001 (yes, or the init-
 
 ## The requirements of issue #33
 
-Every requirement is open. "Now" is what exists and what ran; "CI" is what will prove it; "Open" is what waits.
+The entries below retain the original audit and its subsequent updates. The [issue checklist](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33) records current acceptance.
 
 **1. Capability matrix with runtimes, architectures and stable or prerelease versions; reasons for what does not apply.**
 
-- Now: the [Capability matrix](#capability-matrix) with its reasons.
-- CI: the "Since" column of the new parts, from the first tag run.
-- Open: the go for the tag run.
+The [published matrix for v2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33#issuecomment-7217084160) records the supported systems, processors, release channels and runtime limits. The [capability matrix](#capability-matrix) also lists package names and introduction versions.
 
 **2. The artifacts verified on clean machines, recorded for one release.**
 
@@ -373,13 +409,11 @@ Every requirement is open. "Now" is what exists and what ran; "CI" is what will 
 
 - Now: configuration only, see [AI assistant clients](#ai-assistant-clients); no bundle, no connector.
 - CI: nothing; the client of CI is no assistant client.
-- Open: the two client checks with the owner, recorded in the table.
+- Open: the desktop-client check and interactive approval of the command-line edit, recorded in the table.
 
 **8. The UI and its relation to the current packages and tokens of the OpenAEC Style Repo, themes and component conventions.**
 
-- Now: [UI and the OpenAEC Style Repo](#ui-and-the-openaec-style-repo), the gap of 12 commits checked on 25 October 2026, and the ui tests.
-- CI: nothing.
-- Open: the decision on iced 0.14 and the current packages, and `check_portable_ui.py` against both commits. This requirement stays open on the gap.
+The 2026.48.0 check covers the source snapshot, shared assets and theme values, the 21 UI crate tests and four rendered bands in each theme. The upstream snapshot checker was run against both revisions. The iced 0.14 migration and wider component parity remain open. [Verification and reproduction](#verification-against-the-2026480-release)
 
 **9. Signing verified on the files of a release, updater signatures apart, with signer or public key, command and result.**
 
