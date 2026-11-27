@@ -61,8 +61,13 @@ pub fn read(
         // row-vector matrix with translation in the last row; also accept the
         // last-column variant emitted by some other producers.
         let scanner_position = [scanner[0], scanner[1], scanner[2]];
-        let column_translation = transform[3][..3].iter().all(|value| value.abs() < 1e-12)
-            && (0..3).any(|axis| transform[axis][3].abs() >= 1e-12);
+        let row_translation = transform[3][..3].iter().any(|value| value.abs() >= 1e-12);
+        let column_translation = (0..3).any(|axis| transform[axis][3].abs() >= 1e-12);
+        if (row_translation && column_translation) || (transform[3][3] - 1.0).abs() >= 1e-12 {
+            return Err(LoadError::InvalidData(format!(
+                "non-affine PTX transform in scan {scan}: expected [0, 0, 0, 1] in the last row or last column"
+            )));
+        }
         // Every block is reported, also one whose station is unusable, so
         // that its points are not taken for those of the block before it.
         scan_begin(
@@ -240,6 +245,37 @@ pub(crate) mod tests {
             )));
             assert_eq!(stations, 1);
             assert_eq!(points, [[1.0, 2.0, 3.0]]);
+        }
+    }
+
+    #[test]
+    fn rejects_non_affine_registration_before_reporting_the_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("non-affine.ptx");
+        let header = "1\n1\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n";
+        let first = format!("{header}1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 1\n1 2 3 .5\n");
+        for matrix in [
+            "1 0 0 25\n0 1 0 0\n0 0 1 0\n10 20 30 1",
+            "1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 0",
+            "1 0 0 10\n0 1 0 20\n0 0 1 30\n0 0 0 2",
+        ] {
+            std::fs::write(&path, format!("{first}{header}{matrix}\n4 5 6 .5\n")).unwrap();
+            let mut stations = 0;
+            let mut points = Vec::new();
+            let error = super::read(
+                &path,
+                &mut |point| {
+                    points.push(point.xyz);
+                    Ok(())
+                },
+                &mut |_| stations += 1,
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("non-affine PTX transform in scan 2"));
+            assert_eq!(stations, 1);
+            assert_eq!(points, [[11.0, 22.0, 33.0]]);
         }
     }
 

@@ -1205,11 +1205,11 @@ fn is_ptx(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"))
 }
 
-// Legacy PTX metadata can describe points placed by a non-finite transform.
+// Legacy PTX metadata can describe points placed by a non-finite or non-affine transform.
 // Re-read the source once before trusting its preview or attaching its index.
 fn cloud_metadata_version(path: &Path) -> u8 {
     if is_ptx(path) {
-        2
+        3
     } else {
         1
     }
@@ -3592,18 +3592,27 @@ mod tests {
         let _index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
         write_preview_cache_in(root, &cloud).unwrap();
         let fingerprint = cache_fingerprint(&cloud, &config).unwrap();
-        for path in [
+        let paths = [
             cache_directory(root, &fingerprint).join("cloud.json"),
             preview_cache_directory(root, &fingerprint).join("preview.json"),
-        ] {
-            let mut header: serde_json::Value =
-                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-            assert_eq!(header["version"], 2);
-            header["version"] = 1.into();
-            fs::write(path, serde_json::to_vec(&header).unwrap()).unwrap();
+        ];
+        for path in &paths {
+            let header: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(header["version"], 3);
         }
-        assert!(open_cached_preview(&source, 10, config).unwrap().is_none());
-        assert!(open_preview_cache_in(root, &source, 10).unwrap().is_none());
+        for old_version in [1, 2] {
+            for path in &paths {
+                let mut header: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                header["version"] = old_version.into();
+                fs::write(path, serde_json::to_vec(&header).unwrap()).unwrap();
+            }
+            assert!(open_cached_preview(&source, 10, config.clone())
+                .unwrap()
+                .is_none());
+            assert!(open_preview_cache_in(root, &source, 10).unwrap().is_none());
+        }
     }
 
     #[test]
