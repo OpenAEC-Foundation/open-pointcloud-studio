@@ -195,24 +195,75 @@ fn material_library_paths(parent: &Path, names: Vec<&str>) -> Vec<PathBuf> {
         .collect()
 }
 
-fn apply_material_colors(
+fn obj_index(raw: i64, defined: usize) -> Option<u32> {
+    let index = match raw {
+        1.. => raw - 1,
+        ..0 => defined as i64 + raw,
+        0 => return None,
+    };
+    u32::try_from(index).ok()
+}
+
+struct IndexedNormals<'a> {
+    faces: &'a [[u32; 3]],
+    values: &'a [[f32; 3]],
+}
+
+// The common OBJ written by Studio uses the position index for its normal.
+// Only allocate a second triangle table when a face actually uses separate indices.
+enum NormalFaces {
+    Aligned,
+    Indexed(Vec<[u32; 3]>),
+    Incomplete,
+}
+
+impl NormalFaces {
+    fn record(&mut self, previous: &[[u32; 3]], positions: [u32; 3], normals: [Option<u32>; 3]) {
+        if matches!(self, Self::Incomplete) {
+            return;
+        }
+        let [Some(a), Some(b), Some(c)] = normals else {
+            *self = Self::Incomplete;
+            return;
+        };
+        let indices = [a, b, c];
+        if matches!(self, Self::Aligned) && indices != positions {
+            *self = Self::Indexed(previous.to_vec());
+        }
+        if let Self::Indexed(faces) = self {
+            faces.push(indices);
+        }
+    }
+}
+
+fn apply_face_attributes(
     mesh: &mut MeshGeometry,
-    mut colors: Vec<[u8; 3]>,
     explicit_colors: &[bool],
     face_colors: &[Option<[u8; 3]>],
+    indexed_normals: Option<IndexedNormals<'_>>,
 ) -> Result<(), LoadError> {
     let mut assigned = vec![None; mesh.vertices.len()];
-    let mut duplicates = HashMap::<(u32, [u8; 3]), u32>::new();
-    for (face, material) in mesh.triangles.iter_mut().zip(face_colors) {
-        for index in face {
+    let mut duplicates = HashMap::new();
+    for (face_number, (face, material)) in mesh.triangles.iter_mut().zip(face_colors).enumerate() {
+        for (corner, index) in face.iter_mut().enumerate() {
             let original = *index as usize;
-            if explicit_colors[original] {
-                continue;
-            }
-            let desired = material.unwrap_or([255; 3]);
+            let color = match &mesh.colors {
+                Some(colors) if explicit_colors[original] => colors[original],
+                _ => material.unwrap_or([255; 3]),
+            };
+            let normal = indexed_normals.as_ref().map(|source| {
+                let i = source.faces[face_number][corner];
+                (i, source.values[i as usize])
+            });
+            let desired = (color, normal.map_or(*index, |(i, _)| i));
             if assigned[original].is_none() {
                 assigned[original] = Some(desired);
-                colors[original] = desired;
+                if let Some(colors) = &mut mesh.colors {
+                    colors[original] = color;
+                }
+                if let (Some(rows), Some((_, value))) = (&mut mesh.normals, normal) {
+                    rows[original] = value;
+                }
                 continue;
             }
             if assigned[original] == Some(desired) {
@@ -225,20 +276,21 @@ fn apply_material_colors(
             }
             if mesh.vertices.len() >= MAX_VERTICES {
                 return Err(LoadError::InvalidData(
-                    "OBJ material vertex limit exceeded".into(),
+                    "OBJ vertex limit exceeded while splitting face attributes".into(),
                 ));
             }
             let duplicate = mesh.vertices.len() as u32;
             mesh.vertices.push(mesh.vertices[original]);
-            colors.push(desired);
+            if let Some(colors) = &mut mesh.colors {
+                colors.push(color);
+            }
             if let Some(normals) = &mut mesh.normals {
-                normals.push(normals[original]);
+                normals.push(normal.map_or(normals[original], |(_, value)| value));
             }
             duplicates.insert(key, duplicate);
             *index = duplicate;
         }
     }
-    mesh.colors = Some(colors);
     Ok(())
 }
 
@@ -253,7 +305,7 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
     let mut explicit_colors = Vec::<bool>::new();
     let mut has_color = false;
     let mut normals = Vec::<[f32; 3]>::new();
-    let mut normals_aligned = true;
+    let mut normal_faces = NormalFaces::Aligned;
     let mut materials = HashMap::<String, [u8; 3]>::new();
     let mut active_material = None;
     let mut face_colors = Vec::<Option<[u8; 3]>>::new();
@@ -327,30 +379,23 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
                 normals.push(values.try_into().unwrap());
             }
             Some("f") => {
-                let indices: Result<Vec<u32>, LoadError> = fields
+                let indices: Result<Vec<_>, LoadError> = fields
                     .map(|field| {
                         let mut components = field.split('/');
                         let raw: i64 =
                             components.next().unwrap_or_default().parse().map_err(|_| {
                                 LoadError::InvalidData("invalid OBJ face index".into())
                             })?;
-                        let index = if raw > 0 {
-                            raw - 1
-                        } else if raw < 0 {
-                            mesh.vertices.len() as i64 + raw
-                        } else {
-                            -1
-                        };
-                        if index < 0 || index >= mesh.vertices.len() as i64 {
-                            return Err(LoadError::InvalidData(
-                                "OBJ face index out of range".into(),
-                            ));
-                        }
-                        let normal = components.nth(1).unwrap_or_default();
-                        if normal.parse::<i64>().ok() != Some(index + 1) {
-                            normals_aligned = false;
-                        }
-                        Ok(index as u32)
+                        let index = obj_index(raw, mesh.vertices.len())
+                            .filter(|&i| (i as usize) < mesh.vertices.len())
+                            .ok_or_else(|| {
+                                LoadError::InvalidData("OBJ face index out of range".into())
+                            })?;
+                        let normal = components
+                            .nth(1)
+                            .and_then(|field| field.parse().ok())
+                            .and_then(|raw| obj_index(raw, normals.len()));
+                        Ok((index, normal))
                     })
                     .collect();
                 let indices = indices?;
@@ -363,8 +408,14 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
                     if mesh.triangles.len() >= MAX_TRIANGLES {
                         return Err(LoadError::InvalidData("OBJ triangle limit exceeded".into()));
                     }
-                    mesh.triangles
-                        .push([indices[0], indices[next], indices[next + 1]]);
+                    let corners = [indices[0], indices[next], indices[next + 1]];
+                    let positions = corners.map(|(vertex, _)| vertex);
+                    normal_faces.record(
+                        &mesh.triangles,
+                        positions,
+                        corners.map(|(_, normal)| normal),
+                    );
+                    mesh.triangles.push(positions);
                     face_colors.push(active_material);
                 }
             }
@@ -376,13 +427,32 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
             "OBJ has no faces or changed while loading".into(),
         ));
     }
-    if normals_aligned && normals.len() == mesh.vertices.len() {
-        mesh.normals = Some(normals);
-    }
-    if face_colors.iter().any(Option::is_some) {
-        apply_material_colors(&mut mesh, colors, &explicit_colors, &face_colors)?;
-    } else if has_color {
+    let has_material = face_colors.iter().any(Option::is_some);
+    if has_color || has_material {
         mesh.colors = Some(colors);
+    }
+    let normal_count = normals.len();
+    let all_defined =
+        |faces: &[[u32; 3]]| faces.iter().flatten().all(|&i| (i as usize) < normal_count);
+    let indexed_normals = match &normal_faces {
+        NormalFaces::Aligned
+            if normal_count >= mesh.vertices.len() || all_defined(&mesh.triangles) =>
+        {
+            normals.resize(mesh.vertices.len(), [0., 0., 1.]);
+            mesh.normals = Some(normals);
+            None
+        }
+        NormalFaces::Indexed(faces) if all_defined(faces) => {
+            mesh.normals = Some(vec![normals[0]; mesh.vertices.len()]);
+            Some(IndexedNormals {
+                faces,
+                values: &normals,
+            })
+        }
+        _ => None,
+    };
+    if has_material || indexed_normals.is_some() {
+        apply_face_attributes(&mut mesh, &explicit_colors, &face_colors, indexed_normals)?;
     }
     Ok(mesh)
 }
@@ -462,6 +532,81 @@ mod tests {
         };
         assert!(write_obj_mesh(&invalid, &destination, &[]).is_err());
         assert_eq!(std::fs::read_to_string(destination).unwrap(), saved);
+    }
+
+    #[test]
+    fn separate_corner_normals_share_and_split_vertices_with_their_colors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fold.obj");
+        std::fs::write(directory.path().join("fold.mtl"), "newmtl red\nKd 1 0 0\n").unwrap();
+        std::fs::write(
+            &path,
+            "mtllib fold.mtl\nv 0 0 0 0 0 1\nv 1 0 0\nv 1 1 0\nv 0 1 0\n\
+            vn 0 0 1\nvn 0 1 0\nusemtl red\nf 1//1 2//1 3//1 4//1\n\
+            f -4/1/-1 -2/1/-1 -1/1/-1\nv 0 0 1\nvn 1 0 0\nf 1//2 4//2 5//3\n",
+        )
+        .unwrap();
+        let mesh = read_obj_mesh(path).unwrap();
+        assert_eq!(mesh.vertices.len(), 8);
+        assert_eq!(mesh.triangles, [[0, 1, 2], [0, 2, 3], [5, 6, 7], [5, 7, 4]]);
+        let normals = mesh.normals.unwrap();
+        assert_eq!(
+            normals,
+            [
+                [0., 0., 1.],
+                [0., 0., 1.],
+                [0., 0., 1.],
+                [0., 0., 1.],
+                [1., 0., 0.],
+                [0., 1., 0.],
+                [0., 1., 0.],
+                [0., 1., 0.]
+            ]
+        );
+        let colors = mesh.colors.unwrap();
+        for (i, color) in colors.iter().enumerate() {
+            assert_eq!(
+                *color,
+                if i == 0 || i == 5 {
+                    [0, 0, 255]
+                } else {
+                    [255, 0, 0]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_earlier_aligned_faces_when_later_corners_use_a_separate_normal() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\n\
+            f 1//1 2//2 3//3\nvn 1 0 0\nvn 0 1 0\nvn 0 0 1\nf 1//-1 3//3 2//2\n",
+        )
+        .unwrap();
+        let mesh = read_obj_mesh(file.path()).unwrap();
+        assert_eq!(mesh.triangles, [[0, 1, 2], [3, 2, 1]]);
+        assert_eq!(mesh.vertices[0], mesh.vertices[3]);
+        assert_eq!(
+            mesh.normals.unwrap(),
+            [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., 1.]]
+        );
+        assert!(mesh.colors.is_none());
+    }
+
+    #[test]
+    fn incomplete_normal_references_keep_unsplit_geometry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed.obj");
+        for corner in ["3", "3//0", "3//-3", "3//5"] {
+            std::fs::write(&path, format!("v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nvn 0 1 0\nf 1//1 2//1 3//1\nf 1//2 2//2 {corner}\n")).unwrap();
+            let mesh = read_obj_mesh(&path).unwrap();
+            assert!(mesh.normals.is_none());
+            assert!(mesh.colors.is_none());
+            assert_eq!(mesh.vertices.len(), 3);
+            assert_eq!(mesh.triangles, [[0, 1, 2]; 2]);
+        }
     }
 
     #[test]
