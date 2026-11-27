@@ -13,19 +13,26 @@ pub fn read_obj(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
-    let reader = BufReader::new(File::open(path)?);
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut line = String::new();
+    let mut next_line = 1;
+    loop {
+        let lines = super::obj_mesh::read_obj_statement(&mut reader, &mut line)?;
+        if lines == 0 {
+            break;
+        }
+        let start_line = next_line;
+        next_line += lines;
         let mut fields = line.split_whitespace();
         if fields.next() != Some("v") {
             continue;
         }
         let values: Vec<&str> = fields.collect();
-        let xyz = parse_xyz(&values, index + 1)?;
+        let xyz = parse_xyz(&values, start_line)?;
         let rgb = if values.len() >= 7 {
-            parse_rgb(&values[4..7], index + 1)?
+            parse_rgb(&values[4..7], start_line)?
         } else if values.len() >= 6 {
-            parse_rgb(&values[3..6], index + 1)?
+            parse_rgb(&values[3..6], start_line)?
         } else {
             None
         };
@@ -182,6 +189,15 @@ fn parse_rgb(values: &[&str], line: usize) -> Result<Option<[u8; 3]>, LoadError>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn obj_vertex_errors_use_the_physical_line_number_after_a_continuation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bad-vertex.obj");
+        std::fs::write(&path, "v 1 2 \\\n3\nv bad 4 5\n").unwrap();
+        let error = super::read_obj(&path, &mut |_| Ok(())).unwrap_err();
+        assert!(error.to_string().contains("invalid vertex on line 3"));
+    }
+
     #[test]
     fn reads_mesh_vertices() {
         let dir = tempfile::tempdir().unwrap();
