@@ -294,11 +294,41 @@ fn apply_face_attributes(
     Ok(())
 }
 
+/// Read one OBJ statement and return its number of physical lines, or zero at EOF.
+pub(super) fn read_obj_statement(
+    reader: &mut impl BufRead,
+    line: &mut String,
+) -> std::io::Result<usize> {
+    line.clear();
+    let mut count = 0;
+    loop {
+        let start = line.len();
+        if reader.read_line(line)? == 0 {
+            if start == 0 {
+                return Ok(0);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "incomplete OBJ line continuation",
+            ));
+        }
+        count += 1;
+        if start == 0 && line.trim_start().starts_with('#') {
+            return Ok(count);
+        }
+        let Some(prefix) = line[start..].trim_end().strip_suffix('\\') else {
+            return Ok(count);
+        };
+        line.truncate(start + prefix.len());
+        line.push(' ');
+    }
+}
+
 /// Read OBJ vertex positions and triangulate polygon faces for GPU display.
 pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> {
     let path = path.as_ref();
     let before = SourceStamp::read(path)?;
-    let source = BufReader::new(File::open(path)?);
+    let mut source = BufReader::new(File::open(path)?);
     let parent = path.parent().unwrap_or(Path::new("."));
     let mut mesh = MeshGeometry::default();
     let mut colors = Vec::<[u8; 3]>::new();
@@ -309,8 +339,8 @@ pub fn read_obj_mesh(path: impl AsRef<Path>) -> Result<MeshGeometry, LoadError> 
     let mut materials = HashMap::<String, [u8; 3]>::new();
     let mut active_material = None;
     let mut face_colors = Vec::<Option<[u8; 3]>>::new();
-    for line in source.lines() {
-        let line = line?;
+    let mut line = String::new();
+    while read_obj_statement(&mut source, &mut line)? != 0 {
         let mut fields = line.split_whitespace();
         match fields.next() {
             Some("mtllib") => {
@@ -469,6 +499,45 @@ mod tests {
         let mesh = read_obj_mesh(file.path()).unwrap();
         assert_eq!(mesh.vertices.len(), 4);
         assert_eq!(mesh.triangles, vec![[0, 1, 2], [0, 2, 3]]);
+    }
+
+    #[test]
+    fn continued_obj_statements_preserve_triangle_corners_and_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wrapped.obj");
+        let lines = [
+            "# A comment ending in a backslash is still a comment. \\",
+            "v 0 0 0 1 0 0",
+            "v 1 0 0 0 1 0",
+            "v 1 1 0 0 0 1",
+            "v 0 1 \\",
+            "0 1 1 0",
+            "vn 0 0 1",
+            "vn 0 1 0",
+            "f -4//2 -3//1\\",
+            "  -2//2 \\",
+            "-1//1",
+        ];
+        for newline in ["\n", "\r\n"] {
+            std::fs::write(&path, lines.join(newline)).unwrap();
+            let mesh = read_obj_mesh(&path).unwrap();
+            assert_eq!(mesh.triangles, [[0, 1, 2], [0, 2, 3]]);
+            assert_eq!(mesh.vertices[3], [0., 1., 0.]);
+            let cloud = crate::open(&path, 4).unwrap();
+            assert_eq!(cloud.total_points, 4);
+            assert_eq!(cloud.points[3].xyz, mesh.vertices[3]);
+            assert_eq!(cloud.points[3].rgb, Some([255, 255, 0]));
+            assert_eq!(mesh.colors.unwrap()[3], [255, 255, 0]);
+            assert_eq!(
+                mesh.normals.unwrap(),
+                [[0., 1., 0.], [0., 0., 1.], [0., 1., 0.], [0., 0., 1.]]
+            );
+        }
+        std::fs::write(&path, format!("{}\nf 1 2 3 \\", lines.join("\n"))).unwrap();
+        assert!(read_obj_mesh(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("incomplete OBJ line continuation"));
     }
 
     #[test]
