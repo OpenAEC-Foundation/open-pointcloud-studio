@@ -67,7 +67,7 @@ The evidence of record comes from the published tag run of a release: its jobs, 
 
 ## Capability matrix
 
-The supported stable version in this matrix is 2026.48.0. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
+The supported stable version is 2026.48.0. As of 27 November 2026, GitHub listed 19 published releases and marked none as a prerelease. The experimental ARM64 desktop and preview cloud API ship under the stable tag. Historical introduction versions are retained where established; “by 2026.45.1” identifies the verified delivery without claiming its earliest release. Release numbers follow [Releasing](../native/packaging/README.md#releasing).
 
 | Delivered as | System or runtime | Processors | Status | Version | Since | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -78,12 +78,15 @@ The supported stable version in this matrix is 2026.48.0. Historical introductio
 | Command-line modes (`--export`, `--section`, `--drawing` and the others) | in every desktop package, without a window | as the package | stable | as above | 0.4.0 | `cli_help.rs`; `smoke-test.sh` in the Packages workflow |
 | Local command API | a running window, on 127.0.0.1 with a token; `native-rust-v1` | as the package | stable; changes are additive, and a release that adds a command or a field raises the revision | revision 18 in 2026.48.0 | 0.4.0 | `native_api.rs` and `mcp/tests.rs` hold [API.md](../native/API.md) to the code |
 | MCP over standard input and output (`--mcp`) | in every desktop package | as the package | stable | as above | 0.7.0 | Packages `verify-linux`, step *External MCP client* |
+| Managed desktop with MCP over Streamable HTTP (`--mcp-http`) | Linux with a running Studio window | amd64, arm64 | tested on the released native packages | 2026.48.0 published | by 2026.48.0 | Both AppImages opened a 12-million-point scan and reopened its edited layer. [Package test](https://github.com/boazeggs/open-pointcloud-studio/actions/runs/45965230726) |
 | C library `ops_pointcloud`, ABI 1.0: `ops_pointcloud.dll` | Windows 10 and 11 | x64 | new; ABI 1.x is stable | 2026.48.0 published | by 2026.45.1 | SDK `windows` |
 | `libops_pointcloud.dylib` | macOS 11 and later | arm64 and x86-64 in one file | new | as above | as above | SDK `macos`, `macos-x86_64`; Release `verify-release` (macos-arm64, macos-x86_64) |
 | `libops_pointcloud.so.1` | Linux with a C library of version 2.35 or newer | amd64, arm64 | new | as above | as above | SDK `linux` |
 | Rust crate `pointcloud-core`, entry point `pointcloud_core::ops` | by the git tag `vYYYY.W.N`; tested on Linux, Windows and macOS | any the core builds for | new; no semantic versioning beyond the one-release notice of [Compatibility](library.md#compatibility) | as above | as above | CI `native`; SDK `linux` (amd64), step *Build and run the Rust consumer* |
 | Container image of the cloud API, `ghcr.io/openaec-foundation/open-pointcloud-studio-api` | Linux containers | amd64 | preview, until it has passed its smoke test in the cloud deployment | as above | as above | Container `image`; Release `image`, `verify-release` (linux) |
 | MCP over Streamable HTTP (`POST /mcp` of the cloud API) | in the image | amd64 | preview, with the image | as above | as above | Container `image`, step *External MCP client* |
+
+The 27 November binary inspection covered the Studio and CAD executables and the C SDK in the published archives. The Windows files contain AMD64 PE headers. On macOS, each file contains Intel and Apple silicon slices with a deployment target of 11.0. On Linux, the x86-64 and AArch64 binaries each require glibc symbols through GLIBC_2.35. The release job pulled the API image by digest. An anonymous GHCR pull-token request returned HTTP 401 on 27 November. The AWS template accepts a registry secret through `RegistryCredentialsSecretArn`. [Versioned evidence](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33#issuecomment-7217084160) · [AWS parameters](../deploy/aws/README.md#parameters)
 
 What is not delivered or does not apply, and why:
 
@@ -366,13 +369,11 @@ Volume ownership:  /work and /work/tmp writable by user 10001 (yes, or the init-
 
 ## The requirements of issue #33
 
-Every requirement is open. "Now" is what exists and what ran; "CI" is what will prove it; "Open" is what waits.
+The entries below retain the original audit and its subsequent updates. The [issue checklist](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33) records current acceptance.
 
 **1. Capability matrix with runtimes, architectures and stable or prerelease versions; reasons for what does not apply.**
 
-- Now: the [Capability matrix](#capability-matrix) with its reasons.
-- CI: the "Since" column of the new parts, from the first tag run.
-- Open: the go for the tag run.
+The [published matrix for v2026.48.0](https://github.com/OpenAEC-Foundation/open-pointcloud-studio/issues/33#issuecomment-7217084160) records the supported systems, processors, release channels and runtime limits. The [capability matrix](#capability-matrix) also lists package names and introduction versions.
 
 **2. The artifacts verified on clean machines, recorded for one release.**
 
