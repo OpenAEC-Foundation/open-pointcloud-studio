@@ -112,6 +112,12 @@ impl Studio {
             }
         };
         if let Action::Input(key, message) = action {
+            // Each canvas records its own bounds. A passive resize from an
+            // inactive canvas must not change the selected document or camera.
+            if matches!(*message, Message::ViewportSize(_)) && key != documents.active {
+                self.documents = Some(documents);
+                return hydration;
+            }
             let focus = documents.focus(self, &key);
             self.documents = Some(documents);
             return match focus {
