@@ -5,6 +5,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 mod posed;
+pub(crate) use posed::write as write_scan_blocks;
+
+pub(crate) fn has_scan_blocks(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pcd") || ext.eq_ignore_ascii_case("ptx"))
+}
 
 fn point_values(cloud: &PointCloud, point: Point, xyz: [f64; 3]) -> Vec<e57::RecordValue> {
     use e57::RecordValue;
@@ -490,22 +497,14 @@ pub fn write_e57_scene(
                 });
             }
             let guid = format!("{{{}}}", uuid::Uuid::new_v4());
-            let has_scan_blocks = source
-                .cloud
-                .path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("pcd") || extension.eq_ignore_ascii_case("ptx")
-                });
-            if preserve_images && has_scan_blocks {
+            if preserve_images && has_scan_blocks(&source.cloud.path) {
                 let before = processed;
-                written += posed::write(
+                written += write_scan_blocks(
                     &mut writer,
                     source,
                     prototype,
                     &guid,
-                    &mut |ordinal, point| include(source_index, ordinal, point),
+                    &mut |ordinal, point| include(source_index, ordinal, &point).then_some(point),
                     &mut |read| progress(before + read, total),
                 )?;
                 processed += source.cloud.total_points;
