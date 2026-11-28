@@ -39,8 +39,13 @@ pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Me
     openaec_ui::widgets::property_grid_control_with(axis, values.into(), ui_theme::shared_theme)
 }
 
-/// Keep each axis on its own row so survey offsets fit a narrow Properties panel.
-pub fn las_coordinate_grid(grid: pointcloud_core::LasCoordinateGrid) -> Element<'static, Message> {
+/// Show a scale and a displacement per axis without rounding sub-millimetre edits.
+pub fn coordinate_rows(
+    title: &'static str,
+    displacement_label: &'static str,
+    scale: [f64; 3],
+    displacement: [f64; 3],
+) -> Element<'static, Message> {
     let line = |axis: String, scale: String, offset: String| {
         row![
             text(axis).size(12).width(Length::Fixed(28.0)),
@@ -51,18 +56,18 @@ pub fn las_coordinate_grid(grid: pointcloud_core::LasCoordinateGrid) -> Element<
         .padding([3, 8])
     };
     let mut grid_rows = column![
-        section_header("LAS coordinate grid"),
+        section_header(title),
         line(
             crate::i18n::tr("Axis").into(),
             crate::i18n::tr("Scale factor").into(),
-            crate::i18n::tr("Offset").into(),
+            crate::i18n::tr(displacement_label).into(),
         )
     ];
     for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
         grid_rows = grid_rows.push(line(
             axis.into(),
-            grid.scale[i].to_string(),
-            grid.offset[i].to_string(),
+            scale[i].to_string(),
+            displacement[i].to_string(),
         ));
     }
     grid_rows.into()

@@ -11971,31 +11971,21 @@ impl Studio {
             }
             if let Some(grid) = entry.las_grid {
                 properties = properties
-                    .push(opencad_properties::las_coordinate_grid(grid))
+                    .push(opencad_properties::coordinate_rows(
+                        "LAS coordinate grid",
+                        "Offset",
+                        grid.scale,
+                        grid.offset,
+                    ))
                     .push_maybe(entry.las_rounding_note());
             }
             if !entry.transform.is_identity() {
-                let source_center = entry.cloud.bounds.center();
-                let edited_center = entry.bounds().center();
                 properties = properties
-                    .push(opencad_properties::section_header("Live transform"))
-                    .push(opencad_properties::property_row(
-                        "Scale XYZ",
-                        format!(
-                            "{:.3}, {:.3}, {:.3}",
-                            entry.transform.scale[0],
-                            entry.transform.scale[1],
-                            entry.transform.scale[2]
-                        ),
-                    ))
-                    .push(opencad_properties::property_row(
+                    .push(opencad_properties::coordinate_rows(
+                        "Live transform",
                         "Centre shift",
-                        format!(
-                            "{:.3}, {:.3}, {:.3}",
-                            edited_center[0] - source_center[0],
-                            edited_center[1] - source_center[1],
-                            edited_center[2] - source_center[2]
-                        ),
+                        entry.transform.scale,
+                        entry.transform.centre_shift(entry.cloud.bounds),
                     ))
                     .push(
                         container(
