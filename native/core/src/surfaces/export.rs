@@ -511,6 +511,8 @@ pub(crate) fn faces_model(
     let residual_values = |residuals: &super::Residuals| {
         [
             ("Points", PropertyValue::Count(residuals.points)),
+            ("ResidualMean", PropertyValue::Length(residuals.mean)),
+            ("ResidualMeanAbs", PropertyValue::Length(residuals.mean_abs)),
             ("ResidualRms", PropertyValue::Length(residuals.rms)),
             ("ResidualP95", PropertyValue::Length(residuals.p95)),
             ("ResidualMax", PropertyValue::Length(residuals.max)),
@@ -652,15 +654,18 @@ pub fn write_faces_cad(
 /// an extruded circle along its axis. See `cad3d::ifc` for the placement of
 /// coordinates far from zero. `source` is the file name of the anchor
 /// layer; a folder in it is left out. `notes` go into the description of
-/// the project. An existing file is replaced only by a complete one.
+/// the project. Store the anchor scan beside the IFC so its project-level
+/// document reference resolves. An existing file is replaced only by a complete one.
 pub fn write_faces_ifc(
     surfaces: &DetectedSurfaces,
-    source: &str,
+    source: impl AsRef<Path>,
     destination: impl AsRef<Path>,
     notes: &[&str],
 ) -> Result<u64, LoadError> {
-    let model = faces_model(surfaces, source, notes)?;
-    crate::cad3d::ifc::write_model_ifc(&model, destination.as_ref())
+    let name = source.as_ref().file_name();
+    let label = name.unwrap_or_default().to_string_lossy();
+    let model = faces_model(surfaces, &label, notes)?;
+    crate::cad3d::ifc::write_model_ifc(&model, destination.as_ref(), name)
 }
 
 /// Scene positions and normals as the source of a layer has them, so that

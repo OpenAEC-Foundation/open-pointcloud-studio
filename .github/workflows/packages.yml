@@ -388,62 +388,26 @@ jobs:
       # application with its licence texts.
       - name: Build the installer
         shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
         run: |
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $compiler)) {
             choco install innosetup --no-progress -y
           }
-          & $compiler "/DAppVersion=$env:NUMBER" `
-            "/DSourceDir=..\target\packages\open-pointcloud-studio_$($env:NUMBER)_windows-x64" `
-            native\installer\windows.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Sign the installer
-        continue-on-error: true
-        uses: azure/trusted-signing-action@v0.5.0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}/native/target/installer
-          files-folder-filter: exe
-          files-folder-depth: 1
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-      # The signing steps may fail without failing the job, so their green
-      # tick says nothing. This step says what the files really carry, and the
-      # release notes repeat it.
-      - name: Report the signatures
-        id: signature
-        shell: pwsh
-        run: |
-          $files = @(
-            "native\target\release\open-pointcloud-studio.exe",
-            "native\target\open-cad-studio\package\OpenCADStudio.exe",
-            "native\target\installer\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
-          )
-          $signed = $true
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
-            Sort-Object FullName | Select-Object -Last 1
-          $lines = @('### Windows: Authenticode', '',
-            '| File | Status | Signer | Issuer | Thumbprint | Timestamp by | Timestamp |',
-            '| --- | --- | --- | --- | --- | --- | --- |')
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature $file
-            Write-Host ("{0}: {1} {2}" -f $file, $signature.Status, $signature.SignerCertificate.Subject)
-            if ($signature.Status -ne 'Valid') { $signed = $false }
-            $time = ''
-            if ($signature.Status -eq 'Valid' -and $signtool) {
-              $verify = & $signtool.FullName verify /pa /v $file 2>&1
-              $time = "$($verify | Where-Object { $_ -match 'The signature is timestamped:' } | Select-Object -First 1)".Trim()
-            }
-            $lines += "| $(Split-Path $file -Leaf) | $($signature.Status) | $($signature.SignerCertificate.Subject) | $($signature.SignerCertificate.Issuer) | $($signature.SignerCertificate.Thumbprint) | $($signature.TimeStamperCertificate.Subject) | $time |"
+          $options = @("/DAppVersion=$env:NUMBER",
+            "/DSourceDir=..\target\packages\open-pointcloud-studio_$($env:NUMBER)_windows-x64")
+          if ($env:AZURE_CLIENT_ID) {
+            $signer = (Resolve-Path native/installer/sign-windows.ps1).Path
+            $options += '/DSignRelease', ('/SOpenAEC=pwsh.exe -NoProfile -NonInteractive -File $q{0}$q $f' -f $signer)
           }
-          $lines | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
-          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          & $compiler @options native\installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Collect the installer
         run: |
           setup="open-pointcloud-studio_${NUMBER}_x64-setup.exe"
@@ -473,6 +437,42 @@ jobs:
               throw "'Open with' is not registered for .$extension"
             }
           }
+      # The signing steps may fail without failing the job, so their green
+      # tick says nothing. This step says what the files really carry, and the
+      # release notes repeat it.
+      - name: Report the signatures
+        id: signature
+        shell: pwsh
+        run: |
+          $files = @(
+            "native\target\release\open-pointcloud-studio.exe",
+            "native\target\open-cad-studio\package\OpenCADStudio.exe",
+            "$env:RUNNER_TEMP\ops-install\open-pointcloud-studio.exe",
+            "$env:RUNNER_TEMP\ops-install\OpenCADStudio.exe",
+            "$env:RUNNER_TEMP\ops-install\unins000.exe",
+            "native\target\packages\open-pointcloud-studio_$($env:NUMBER)_x64-setup.exe"
+          )
+          $publisher = (Get-AuthenticodeSignature $files[-1]).SignerCertificate.Subject
+          $signed = $true
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName | Select-Object -Last 1
+          $lines = @('### Windows: Authenticode', '',
+            '| File | Status | Signer | Issuer | Thumbprint | Timestamp by | Timestamp |',
+            '| --- | --- | --- | --- | --- | --- | --- |')
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            Write-Host ("{0}: {1} {2}" -f $file, $signature.Status, $signature.SignerCertificate.Subject)
+            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or
+                $signature.SignerCertificate.Subject -ne $publisher) { $signed = $false }
+            $time = ''
+            if ($signature.Status -eq 'Valid' -and $signtool) {
+              $verify = & $signtool.FullName verify /pa /v $file 2>&1
+              $time = "$($verify | Where-Object { $_ -match 'The signature is timestamped:' } | Select-Object -First 1)".Trim()
+            }
+            $lines += "| $file | $($signature.Status) | $($signature.SignerCertificate.Subject) | $($signature.SignerCertificate.Issuer) | $($signature.SignerCertificate.Thumbprint) | $($signature.TimeStamperCertificate.Subject) | $time |"
+          }
+          $lines | ForEach-Object { $_ >> $env:GITHUB_STEP_SUMMARY }
+          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
       - name: Smoke-test the installed application
         run: |
           bash native/packaging/smoke-test.sh \
@@ -809,6 +809,13 @@ jobs:
             "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-$ARCH"
           bash native/packaging/managed-wayland-smoke.sh \
             "$RUNNER_TEMP/appimage/squashfs-root/AppRun" "screenshots/managed-paused-$ARCH" --paused-access
+      - name: Keep the managed AppImage measurement for release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-linux-${{ matrix.arch }}
+          overwrite: true
+          path: screenshots/managed-${{ matrix.arch }}/result.json
+          if-no-files-found: error
       - name: Start the archive binary
         run: |
           tar -xzf "packages/open-pointcloud-studio_${NUMBER}_linux-${ARCH}.tar.gz"

@@ -45,18 +45,34 @@ pub fn read(
             .all(Option::is_some)
             .then(|| axes.map(Option::unwrap));
         let mut transform = [[0.0f64; 4]; 4];
-        for row in &mut transform {
+        for (index, row) in transform.iter_mut().enumerate() {
             let line = next_line(&mut lines)?
                 .ok_or_else(|| LoadError::InvalidData("truncated PTX transform".into()))?;
             let values = parse_values(&line, 4)?;
             row.copy_from_slice(&values[..4]);
+            if !row.iter().all(|value| value.is_finite()) {
+                return Err(LoadError::InvalidData(format!(
+                    "non-finite PTX transform in scan {scan}, row {}",
+                    index + 1
+                )));
+            }
         }
         // PTX's scanner position is already registered. The reference producer writes a
         // row-vector matrix with translation in the last row; also accept the
         // last-column variant emitted by some other producers.
         let scanner_position = [scanner[0], scanner[1], scanner[2]];
-        let column_translation = transform[3][..3].iter().all(|value| value.abs() < 1e-12)
-            && (0..3).any(|axis| transform[axis][3].abs() >= 1e-12);
+        let row_translation = transform[3][..3].iter().any(|value| value.abs() >= 1e-12);
+        let column_translation = (0..3).any(|axis| transform[axis][3].abs() >= 1e-12);
+        if (row_translation && column_translation) || (transform[3][3] - 1.0).abs() >= 1e-12 {
+            return Err(LoadError::InvalidData(format!(
+                "non-affine PTX transform in scan {scan}: expected [0, 0, 0, 1] in the last row or last column"
+            )));
+        }
+        if !preserves_three_dimensions(&transform) {
+            return Err(LoadError::InvalidData(format!(
+                "singular PTX transform in scan {scan}: the registration collapses a spatial axis"
+            )));
+        }
         // Every block is reported, also one whose station is unusable, so
         // that its points are not taken for those of the block before it.
         scan_begin(
@@ -118,6 +134,23 @@ pub fn read(
         return Err(LoadError::InvalidData("PTX file has no scans".into()));
     }
     Ok(())
+}
+
+/// Test the directions independently of their units. Scaling each row first
+/// avoids overflow and underflow for large or small registration coefficients.
+fn preserves_three_dimensions(transform: &[[f64; 4]; 4]) -> bool {
+    let mut directions = [[0.0; 3]; 3];
+    for (axis, row) in directions.iter_mut().zip(transform) {
+        let scale = row[..3].iter().fold(0.0_f64, |max, x| max.max(x.abs()));
+        if scale == 0.0 {
+            return false;
+        }
+        *axis = std::array::from_fn(|i| row[i] / scale);
+    }
+    // Each component is at most one in magnitude. Coplanar directions can
+    // leave a few rounding errors in their scalar triple product.
+    let [a, b, c] = directions;
+    crate::local_fit::dot(a, crate::local_fit::cross(b, c)).abs() > 8.0 * f64::EPSILON
 }
 
 fn next_line(
@@ -195,6 +228,121 @@ pub(crate) mod tests {
             assert_eq!(station, expected, "ordinal {ordinal}");
         }
         assert!(cloud.station_pose(6).is_none());
+    }
+
+    #[test]
+    fn rejects_non_finite_registration_before_starting_the_affected_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registration.ptx");
+        let header = "1\n1\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n";
+        let matrix = "1 0 0 0\n0 1 0 0\n0 0 1 0\n0 0 0 1\n";
+        let first = format!("{header}{matrix}1 2 3 0.5\n");
+        for (index, replacement) in ["NaN 0 0 0", "0 1 0 inf", "0 0 -inf 0", "0 0 0 NaN"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut rows = matrix.lines().collect::<Vec<_>>();
+            rows[index] = replacement;
+            let second_matrix = rows.join("\n");
+            std::fs::write(
+                &path,
+                format!("{first}{header}{second_matrix}\n4 5 6 0.5\n"),
+            )
+            .unwrap();
+
+            let mut stations = 0;
+            let mut points = Vec::new();
+            let error = super::read(
+                &path,
+                &mut |p| {
+                    points.push(p.xyz);
+                    Ok(())
+                },
+                &mut |_| stations += 1,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(&format!(
+                "non-finite PTX transform in scan 2, row {}",
+                index + 1
+            )));
+            assert_eq!(stations, 1);
+            assert_eq!(points, [[1.0, 2.0, 3.0]]);
+        }
+    }
+
+    #[test]
+    fn rejects_non_affine_registration_before_reporting_the_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("non-affine.ptx");
+        let header = "1\n1\n0 0 0\n1 0 0\n0 1 0\n0 0 1\n";
+        let first = format!("{header}1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 1\n1 2 3 .5\n");
+        for matrix in [
+            "1 0 0 25\n0 1 0 0\n0 0 1 0\n10 20 30 1",
+            "1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 0",
+            "1 0 0 10\n0 1 0 20\n0 0 1 30\n0 0 0 2",
+        ] {
+            std::fs::write(&path, format!("{first}{header}{matrix}\n4 5 6 .5\n")).unwrap();
+            let mut stations = 0;
+            let mut points = Vec::new();
+            let error = super::read(
+                &path,
+                &mut |point| {
+                    points.push(point.xyz);
+                    Ok(())
+                },
+                &mut |_| stations += 1,
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("non-affine PTX transform in scan 2"));
+            assert_eq!(stations, 1);
+            assert_eq!(points, [[11.0, 22.0, 33.0]]);
+        }
+    }
+
+    #[test]
+    fn rejects_collapsed_registrations_before_any_points_of_the_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("collapsed.ptx");
+        let header = "1\n1\n10 20 30\n1 0 0\n0 1 0\n0 0 1\n";
+        let first = format!("{header}1 0 0 0\n0 1 0 0\n0 0 1 0\n10 20 30 1\n1 2 3 .5\n");
+        for matrix in [
+            "1 0 0 0\n0 1 0 0\n0 0 0 0\n10 20 30 1",
+            "1 2 3 10\n2 4 6 20\n0 0 1 30\n0 0 0 1",
+            "1 2 3 0\n3 1 2 0\n4 3 5 0\n0 0 0 1",
+        ] {
+            std::fs::write(&path, format!("{first}{header}{matrix}\n4 5 6 .5\n")).unwrap();
+            let mut stations = 0;
+            let mut points = Vec::new();
+            let error = super::read(
+                &path,
+                &mut |point| {
+                    points.push(point.xyz);
+                    Ok(())
+                },
+                &mut |_| stations += 1,
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("singular PTX transform in scan 2"));
+            assert_eq!(stations, 1);
+            assert_eq!(points, [[11.0, 22.0, 33.0]]);
+        }
+    }
+
+    #[test]
+    fn keeps_reflections_and_independently_scaled_registration_axes() {
+        for scales in [[1e-150; 3], [1e150; 3], [1e-150, 2.0, 1e150]] {
+            let [x, y, z] = scales;
+            assert!(super::preserves_three_dimensions(&[
+                [0.0, -x, 0.0, 0.0],
+                [-y, 0.0, 0.0, 0.0],
+                [0.0, 0.0, z, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]));
+        }
     }
 
     #[test]

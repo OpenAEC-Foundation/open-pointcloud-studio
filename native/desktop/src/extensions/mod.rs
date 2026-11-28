@@ -686,7 +686,7 @@ impl Studio {
                 "path": entry.cloud.path,
                 "points": entry.cloud.total_points,
                 "remaining": entry.remaining_count(),
-                "selected": entry.selection.as_ref().map_or(0, |mask| mask.count),
+                "selected": entry.selected_count(),
                 "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
             })),
             "scans": self.clouds.len(),

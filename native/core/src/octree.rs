@@ -434,11 +434,12 @@ impl OctreeIndex {
             return Self::build_with_progress(cloud, config, progress);
         }
         let fingerprint = cache_fingerprint(cloud, &config)?;
+        let preview_points = config.preview_points;
         let cache_root = config.scratch_dir.clone().unwrap_or_else(cache_root);
         fs::create_dir_all(&cache_root)?;
         let cache_path = cache_directory(&cache_root, &fingerprint);
         if cache_path.exists() {
-            if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint) {
+            if let Ok(index) = Self::open_cached(cloud, &cache_path, &fingerprint, preview_points) {
                 let _ = write_cached_cloud_header(&cache_path, cloud, None);
                 progress(IndexProgress::ready(
                     cloud.total_points,
@@ -460,7 +461,7 @@ impl OctreeIndex {
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
             if cache_path.exists() {
-                return Self::open_cached(cloud, &cache_path, &fingerprint);
+                return Self::open_cached(cloud, &cache_path, &fingerprint, preview_points);
             }
             return Err(error.into());
         }
@@ -716,7 +717,8 @@ impl OctreeIndex {
         if let Err(error) = fs::rename(&temporary_path, &cache_path) {
             let _ = fs::remove_dir_all(&temporary_path);
             if cache_path.exists() {
-                let index = Self::open_cached(&cloud, &cache_path, &fingerprint)?;
+                let index =
+                    Self::open_cached(&cloud, &cache_path, &fingerprint, config.preview_points)?;
                 return Ok((cloud, index));
             }
             return Err(error.into());
@@ -752,7 +754,7 @@ impl OctreeIndex {
         if !directory.exists() {
             return Ok(None);
         }
-        let index = Self::open_cached(cloud, &directory, &fingerprint)?;
+        let index = Self::open_cached(cloud, &directory, &fingerprint, config.preview_points)?;
         let _ = write_cached_cloud_header(&directory, cloud, None);
         Ok(Some(index))
     }
@@ -761,13 +763,14 @@ impl OctreeIndex {
         cloud: &PointCloud,
         directory: &Path,
         fingerprint: &[u8],
+        preview_points: usize,
     ) -> Result<Self, LoadError> {
         if fs::read(directory.join("source.meta"))? != fingerprint {
             return Err(LoadError::InvalidData(
                 "octree cache source mismatch".into(),
             ));
         }
-        let root = open_cached_node(directory, "r".to_owned(), cloud.bounds, 0)?;
+        let root = open_cached_node(directory, "r".to_owned(), cloud.bounds, 0, preview_points)?;
         if root.total_points != cloud.total_points {
             return Err(LoadError::InvalidData(
                 "octree cache point count mismatch".into(),
@@ -1015,6 +1018,19 @@ impl OctreeIndex {
         Ok(points)
     }
 
+    /// Count records in intersecting leaves without opening files. Return
+    /// None as soon as the leaves exceed the caller's read budget.
+    pub fn visible_leaf_candidates(
+        &self,
+        limit: u64,
+        mut visible: impl FnMut(Bounds) -> bool,
+    ) -> Option<u64> {
+        let mut count = 0;
+        let exceeded =
+            visit_visible_leaves(&self.root, &mut visible, &mut |_| {}, &mut count, limit);
+        (!exceeded).then_some(count)
+    }
+
     /// At deep zoom, read nearby leaves exactly and sample only points that
     /// project into the viewport. Return `None` when the candidate leaves are
     /// too large, allowing the caller to use the regular node-preview LOD.
@@ -1034,10 +1050,10 @@ impl OctreeIndex {
         }
         let mut leaves = Vec::new();
         let mut candidates = 0u64;
-        if collect_visible_leaves(
+        if visit_visible_leaves(
             &self.root,
             &mut visible_node,
-            &mut leaves,
+            &mut |leaf| leaves.push(leaf),
             &mut candidates,
             max_scan_points,
         ) {
@@ -1176,10 +1192,10 @@ fn visit_intersecting_node(
     Ok(())
 }
 
-fn collect_visible_leaves<'a>(
+fn visit_visible_leaves<'a>(
     node: &'a IndexedNode,
     visible: &mut impl FnMut(Bounds) -> bool,
-    leaves: &mut Vec<&'a IndexedNode>,
+    visit: &mut impl FnMut(&'a IndexedNode),
     candidates: &mut u64,
     max_scan_points: u64,
 ) -> bool {
@@ -1191,12 +1207,28 @@ fn collect_visible_leaves<'a>(
         if *candidates > max_scan_points {
             return true;
         }
-        leaves.push(node);
+        visit(node);
         return false;
     }
     node.children
         .iter()
-        .any(|child| collect_visible_leaves(child, visible, leaves, candidates, max_scan_points))
+        .any(|child| visit_visible_leaves(child, visible, visit, candidates, max_scan_points))
+}
+
+fn is_ptx(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"))
+}
+
+// Legacy PTX metadata can describe points placed by an invalid registration matrix.
+// Re-read the source once before trusting its preview or attaching its index.
+fn cloud_metadata_version(path: &Path) -> u8 {
+    if is_ptx(path) {
+        4
+    } else {
+        1
+    }
 }
 
 /// Recover exact PLY, E57, PCD, PTX or text-cloud metadata and a small preview from an
@@ -1234,8 +1266,10 @@ pub(crate) fn open_cached_preview(
         serde_json::from_slice(&fs::read(metadata_path)?).map_err(|error| {
             LoadError::InvalidData(format!("invalid octree cloud metadata: {error}"))
         })?;
-    if header.version != 1
-        || header.total_points == 0
+    if header.version != cloud_metadata_version(path) {
+        return Ok(None);
+    }
+    if header.total_points == 0
         || (0..3).any(|axis| {
             !header.min[axis].is_finite()
                 || !header.max[axis].is_finite()
@@ -1244,11 +1278,7 @@ pub(crate) fn open_cached_preview(
     {
         return Err(LoadError::InvalidData("invalid octree cloud bounds".into()));
     }
-    let is_ptx = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"));
-    if is_ptx && header.scan_poses.is_none() {
+    if is_ptx(path) && header.scan_poses.is_none() {
         // Older manifests cannot recover PTX scanner positions from a cheap
         // header read: every scan block can contain a different pose.
         return Ok(None);
@@ -1286,7 +1316,7 @@ pub(crate) fn open_cached_preview(
         has_rgb: header.has_rgb,
         has_intensity: header.has_intensity,
         has_classification: header.has_classification,
-        scan_poses: if is_ptx {
+        scan_poses: if is_ptx(path) {
             header.scan_poses.unwrap_or_default()
         } else {
             Vec::new()
@@ -1297,7 +1327,7 @@ pub(crate) fn open_cached_preview(
         provisional: false,
         scan_ranges_known: false,
     };
-    let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint)?;
+    let index = OctreeIndex::open_cached(&cloud, &directory, &fingerprint, config.preview_points)?;
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -1382,7 +1412,7 @@ fn write_preview_cache_in(root: &Path, cloud: &PointCloud) -> Result<(), LoadErr
         .persist(directory.join("points.bin"))
         .map_err(|error| error.error)?;
     let header = CachedPreviewHeader {
-        version: 1,
+        version: cloud_metadata_version(&cloud.path),
         total_points: cloud.total_points,
         min: cloud.bounds.min,
         max: cloud.bounds.max,
@@ -1446,7 +1476,7 @@ fn open_preview_cache_in(
         return Ok(None);
     };
     let points_path = directory.join("points.bin");
-    if header.version != 1
+    if header.version != cloud_metadata_version(path)
         || header.total_points == 0
         || header.points == 0
         || header.points > header.total_points
@@ -1525,11 +1555,6 @@ fn write_cached_cloud_header(
     cloud: &PointCloud,
     pass: Option<&ScanLog>,
 ) -> Result<(), LoadError> {
-    let is_ptx = cloud
-        .path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"));
     let (poses, ranges) = match pass {
         Some(scans) => (
             &scans.poses,
@@ -1545,14 +1570,15 @@ fn write_cached_cloud_header(
         ),
     };
     let mut header = CachedCloudHeader {
-        version: 1,
+        version: cloud_metadata_version(&cloud.path),
         total_points: cloud.total_points,
         min: cloud.bounds.min,
         max: cloud.bounds.max,
         has_rgb: cloud.has_rgb,
         has_intensity: cloud.has_intensity,
         has_classification: cloud.has_classification,
-        scan_poses: (is_ptx && poses.len() <= MAX_CACHED_SCAN_POSES).then(|| poses.clone()),
+        scan_poses: (is_ptx(&cloud.path) && poses.len() <= MAX_CACHED_SCAN_POSES)
+            .then(|| poses.clone()),
         scan_ranges: ranges,
     };
     let mut serialized = serde_json::to_vec(&header).map_err(|error| {
@@ -1592,7 +1618,13 @@ pub fn disk_caches() -> bool {
     DISK_CACHES.load(Ordering::Relaxed)
 }
 
-/// Where disk indexes are kept: `XDG_CACHE_HOME` when set, otherwise the
+/// Bytes occupied by leaf point records alone. Node previews, directory
+/// entries and temporary files during construction require additional space.
+pub fn minimum_index_bytes(points: u64) -> u64 {
+    points.saturating_mul(RECORD_BYTES as u64)
+}
+
+/// Where disk indexes are kept: an absolute OPS_INDEX_DIR, then `XDG_CACHE_HOME` when set, otherwise the
 /// local application data folder on Windows and `~/.cache` elsewhere. The
 /// temporary directory is the last resort because the system may empty it.
 fn cache_root() -> PathBuf {
@@ -1601,6 +1633,9 @@ fn cache_root() -> PathBuf {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
+    if let Some(root) = set("OPS_INDEX_DIR").filter(|path| path.is_absolute()) {
+        return root;
+    }
     if let Some(root) = set("XDG_CACHE_HOME") {
         return root.join("open-pointcloud-studio/indexes");
     }
@@ -1640,15 +1675,38 @@ fn cache_fingerprint_for(
         .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos());
+    // Older CSV caches omitted classification or interpreted it as another attribute.
+    let version = if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    {
+        "octree-v2-csv-classification"
+    } else {
+        "octree-v2"
+    };
     let mut fingerprint = format!(
-        "octree-v2\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
+        "{version}\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
         path, stamp.length, modified, config.leaf_points, config.preview_points, config.max_depth
     )
     .into_bytes();
+    // Older OBJ point caches may omit colours on a continued vertex statement.
+    if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("obj"))
+    {
+        fingerprint.extend_from_slice(b"obj-line-continuations-v1\n");
+    }
     // Only affected E57 files need new normalised preview/index records.
     // Preserve existing keys for other sources, including huge plain-float E57s.
     if super::is_e57(source) && e57_points::open_reader(source)?.repaired_limits {
         fingerprint.extend_from_slice(b"e57-physical-limits-v1\n");
+    }
+    // Earlier caches stored legacy LAS overlap points as class 1.
+    if super::ops::is_las(source) {
+        let header = las::raw::Header::read_from(BufReader::new(File::open(source)?))?;
+        if !las::point::Format::new(header.point_data_record_format)?.is_extended {
+            fingerprint.extend_from_slice(b"las-overlap-class-12\n");
+        }
     }
     Ok(fingerprint)
 }
@@ -1666,6 +1724,7 @@ fn open_cached_node(
     id: String,
     bounds: Bounds,
     depth: u8,
+    preview_points: usize,
 ) -> Result<IndexedNode, LoadError> {
     let preview_name = format!("{id}-preview.bin");
     let preview_path = directory.join(&preview_name);
@@ -1682,6 +1741,7 @@ fn open_cached_node(
                     child_id,
                     child_bounds(bounds, octant),
                     depth + 1,
+                    preview_points,
                 )?);
             }
         }
@@ -1690,7 +1750,13 @@ fn open_cached_node(
                 "octree cache has no children".into(),
             ));
         }
-        let total_points = children.iter().map(|node| node.total_points).sum();
+        let total_points: u64 = children.iter().map(|node| node.total_points).sum();
+        let expected = total_points.min(preview_points as u64);
+        if stored_points != expected {
+            return Err(LoadError::InvalidData(format!(
+                "octree cache preview {id} contains {stored_points} records, expected {expected}"
+            )));
+        }
         return Ok(IndexedNode {
             id,
             bounds,
@@ -3277,6 +3343,11 @@ mod tests {
             (8.0..=12.0).contains(&record.point.xyz[0])
                 && (4.0..=8.0).contains(&record.point.xyz[1])
         };
+        let count = index.visible_leaf_candidates(512, overlaps).unwrap();
+        assert!((25..512).contains(&count));
+        assert_eq!(index.visible_leaf_candidates(count, overlaps), Some(count));
+        assert_eq!(index.visible_leaf_candidates(count - 1, overlaps), None);
+        assert_eq!(index.visible_leaf_candidates(0, |_| false), Some(0));
         let exact = index
             .sample_visible_indexed_cancellable(100, 512, overlaps, visible, || false)
             .unwrap()
@@ -3338,6 +3409,45 @@ mod tests {
                 .path(),
             cache_path
         );
+    }
+
+    #[test]
+    fn rebuilds_a_cache_with_a_wrong_length_inner_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("scan.xyz");
+        fs::write(
+            &source,
+            "0 0 0\n1 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n6 0 0\n7 0 0\n",
+        )
+        .unwrap();
+        let cloud = super::super::open(&source, 8).unwrap();
+        let config = IndexConfig {
+            leaf_points: 1,
+            preview_points: 3,
+            max_depth: 8,
+            scratch_dir: Some(directory.path().join("cache")),
+        };
+        let first = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        let inner = &first.root.children[0].children[0];
+        assert!(!inner.is_leaf());
+        assert_eq!(inner.total_points, 2);
+        let path = first.storage.path().join(&inner.data_path);
+        let expected = fs::read(&path).unwrap();
+        drop(first);
+
+        for records in [0, 1, 3] {
+            fs::write(&path, vec![0; records * RECORD_BYTES]).unwrap();
+            assert!(open_cached_preview(&source, 8, config.clone()).is_err());
+            assert!(OctreeIndex::open_cached_if_present(&cloud, config.clone()).is_err());
+            OctreeIndex::open_and_build_cached_with_progress(
+                &source,
+                8,
+                config.clone(),
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -3566,6 +3676,43 @@ mod tests {
         assert_eq!(cached.scan_poses, cloud.scan_poses);
         assert_eq!(cached.scan_poses[0].position, [10.0, 20.0, 30.0]);
         assert_eq!(cached.point_ordinals.len(), 2);
+    }
+
+    #[test]
+    fn ptx_previews_from_before_transform_validation_require_a_source_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = root.join("scan.PTX");
+        fs::write(&source, crate::ptx::tests::THREE_BLOCKS).unwrap();
+        let cloud = crate::open(&source, 10).unwrap();
+        let config = IndexConfig {
+            scratch_dir: Some(root.to_owned()),
+            ..IndexConfig::default()
+        };
+        let _index = OctreeIndex::build_cached(&cloud, config.clone()).unwrap();
+        write_preview_cache_in(root, &cloud).unwrap();
+        let fingerprint = cache_fingerprint(&cloud, &config).unwrap();
+        let paths = [
+            cache_directory(root, &fingerprint).join("cloud.json"),
+            preview_cache_directory(root, &fingerprint).join("preview.json"),
+        ];
+        for path in &paths {
+            let header: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(header["version"], 4);
+        }
+        for old_version in [1, 2, 3] {
+            for path in &paths {
+                let mut header: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                header["version"] = old_version.into();
+                fs::write(path, serde_json::to_vec(&header).unwrap()).unwrap();
+            }
+            assert!(open_cached_preview(&source, 10, config.clone())
+                .unwrap()
+                .is_none());
+            assert!(open_preview_cache_in(root, &source, 10).unwrap().is_none());
+        }
     }
 
     #[test]

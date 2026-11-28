@@ -193,6 +193,7 @@ async def check_stdio(options, record, folder):
         file.write(grid_ply())
     config = os.path.join(folder, "config")
     environment = dict(os.environ)
+    environment.pop("OPS_INDEX_DIR", None)
     environment["XDG_CONFIG_HOME"] = config
     environment["XDG_CACHE_HOME"] = os.path.join(folder, "cache")
     server = StdioServerParameters(command=options.stdio, args=["--mcp"], env=environment)

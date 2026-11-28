@@ -146,6 +146,7 @@ def main():
     env = {**os.environ, 'QT_QPA_PLATFORM': 'offscreen',
            'XDG_CONFIG_HOME': str(output/'config'), 'XDG_DATA_HOME': str(output/'data'),
            'XDG_CACHE_HOME': str(output/'cache')}
+    env.pop("OPS_INDEX_DIR", None)
     plugins = args.cloudcompare.resolve().parent/'plugins'
     if (plugins/'platforms').is_dir():
         env['QT_QPA_PLATFORM_PLUGIN_PATH'] = str(plugins/'platforms')

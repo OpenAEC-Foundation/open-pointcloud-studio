@@ -22,9 +22,34 @@ De knop **Weergave** onder de **kijkkubus**, rechtsboven in de 3D-weergave, open
 2. Bij een grote scan verschijnt eerst een voorbeeld. De strook boven het model laat zien hoe de rest wordt ingelezen en geïndexeerd, met een knop om te annuleren. De oorspronkelijke scan blijft ongewijzigd.
 3. Gebruik het **muiswiel** om bij de aanwijzer te zoomen, de **middelste of rechter muisknop** om te pannen en **Alt + linkersleep** of **Shift + middelsleep** om te draaien. Met **F** of **Alles tonen** breng je het hele model in beeld. Met **Pan** in de groep NAVIGATIE pan je ook met de linkermuisknop.
 4. Klik op een vlak of hoek van de **kijkkubus** voor een vaste richting. Het knopje eronder wisselt tussen **PERSP** (perspectief) en **ORTHO** (orthografisch).
-5. Onder **Weergave** kies je bij KLEUR **RGB**, **Hoogte**, **Intensiteit** of **Klasse**, en stel je bij DETAIL **Puntgrootte** en **Punten in beeld** in. De rij CAMERA heeft **Iso**, **Boven**, **Voor**, **Rechts**, **Alles tonen**, **Selectie tonen** en **Stations passen**.
+5. Onder **Weergave** kies je bij KLEUR **RGB**, **Hoogte**, **Intensiteit** of **Klasse**, en stel je bij DETAIL **Puntgrootte** en **Punten in beeld** in. Sleep de schuifregelaar of typ het exacte aantal punten in het veld ernaast en druk op Enter. Geeft een virtueel Windows-bureaublad een traag of zwart 3D-beeld, probeer dan 50000 voordat je de scan opent. De rij CAMERA heeft **Iso**, **Boven**, **Voor**, **Rechts**, **Alles tonen**, **Selectie tonen** en **Stations passen**.
 
 Klik links in de projectbrowser op een scan om die actief te maken; de eigenschappen van die scan verschijnen rechts. Voor scans vanaf één miljoen punten maakt de app een herbruikbare octree-index op schijf. De 3D-weergave leest vervolgens detail voor de huidige camera, tot het aantal **Punten in beeld**. Dat maakt ook scans van vele gigabytes hanteerbaar, afhankelijk van opslag, RAM en GPU. Een ongewijzigd bestand gebruikt bij een volgende opening de bestaande index.
+
+Bij LAS en LAZ toont **Eigenschappen → LAS-coördinatenraster** de schaal en offset voor X, Y en Z uit het bronbestand. De broncoördinaat is de opgeslagen gehele waarde maal de schaal, plus de offset. Onder **Actieve transformatie** zie je per as de actuele schaalfactor en hoeveel het midden van de begrenzing is verschoven, ook bij verplaatsingen kleiner dan 1 mm. Als je de laag verplaatst of schaalt en als LAS of LAZ exporteert, worden de bewerkte coördinaten afgerond op het bronraster. Op een raster van 1 mm verdwijnt zo een verschuiving van 0,4 mm langs één as. Binair PLY bewaart de bewerkte XYZ-coördinaten met dubbele precisie. Bewaar het LAS- of LAZ-bronbestand als je ook de meetvelden en het coördinatenstelsel nodig hebt.
+
+### Een uitsnede van een online COPC-scan openen
+
+Met PDAL kun je een rechthoek op volle puntdichtheid ophalen uit een online COPC-scan. De server moet HTTP-bytebereiken ondersteunen. PDAL schrijft de punten naar een lokaal LAZ-bestand dat je in Studio kunt openen. [PDAL COPC-lezer](https://pdal.io/en/stable/stages/readers.copc.html)
+
+```sh
+pdal translate https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz autzen-window.laz --reader=readers.copc --readers.copc.bounds="([637200,637300],[851150,851250])" --writers.las.forward=all --writers.las.extra_dims=all
+open-pointcloud-studio autzen-window.laz
+```
+
+Dit voorbeeld haalt 5.197 punten op uit een vlak van 100 × 100 voet in de openbare Autzen-scan in Oregon. Vul voor een eigen scan de URL en de grenzen in het coördinatenstelsel van de bron in. Het eerste paar bevat de kleinste en grootste X, het tweede de kleinste en grootste Y. Alle hoogtes tellen mee.
+
+### Een Studio-export delen als COPC
+
+Exporteer je selectie uit Studio als LAS of LAZ. Met PDAL maak je er een COPC-bestand van voor viewers die via HTTP delen van een scan ophalen. Vervang `survey.laz` in het voorbeeld door je eigen exportbestand. [COPC schrijven met PDAL](https://pdal.io/en/stable/stages/writers.copc.html)
+
+```sh
+pdal translate survey.laz survey.copc.laz --writer=writers.copc --writers.copc.forward=all --writers.copc.extra_dims=all
+pdal info --stats --dimensions=X,Y,Z survey.laz
+pdal info --driver readers.copc --stats --dimensions=X,Y,Z survey.copc.laz
+```
+
+Vergelijk voor elke as het aantal punten, het minimum en het maximum in beide rapporten. Bewaar de oorspronkelijke export als je de originele veldtypen nodig hebt. Zo schreef PDAL 2.10.2 de geschaalde 16-bits AHN6-velden `Amplitude` en `Reflectance` als 64-bits kommagetallen. Alle meetwaarden kwamen in de geteste export overeen. Zet het COPC-bestand voor online gebruik op een server die HTTP-bytebereiken ondersteunt.
 
 ## 3. Punten selecteren en meten
 
@@ -50,7 +75,9 @@ Een plattegrond, aanzicht of doorsnede van het hele model maak je met **2D-platt
 
 Klik **Mesh** in de groep OPPERVLAK en kies de methode die bij je scan past: **Gesloten mesh** voor een gesloten gebied, **Terreinmesh** voor maaiveld, **3D-oppervlak** voor een open oppervlak of **Vlakken** om onder meer wanden, vloeren en cilindrische elementen te herkennen. De knoppen **Gesloten**, **Terrein**, **3D mesh** en **Vlakken** naast **Mesh** openen dezelfde kaart met die methode gekozen. Beperk de berekening zo nodig met de snedebox, stel de opties in of kies **Aanbevolen gebruiken**, en klik **Uitvoeren**.
 
-Een taak loopt door als je de kaart sluit: de knop **Mesh** blijft dan gemarkeerd en opent de kaart weer op de stap **Uitvoeren**. De strook boven het model toont de stap van een gesloten mesh of een vlakkenherkenning; **Eigenschappen** toont de voortgang van een terreinmesh of 3D-oppervlak. Controleer het resultaat en sla een mesh op met **Mesh exporteren…** als OBJ, PLY, STL, DXF, DWG of IFC. **Oppervlak textureren…** schrijft een mesh met kleuren als OBJ met een MTL-bestand en PNG-textuurpagina's.
+Een taak loopt door als je de kaart sluit: de knop **Mesh** blijft dan gemarkeerd en opent de kaart weer op de stap **Uitvoeren**. De strook boven het model toont de stap van een gesloten mesh of een vlakkenherkenning; **Eigenschappen** toont de voortgang van een terreinmesh of 3D-oppervlak. Controleer het resultaat en sla een mesh op met **Mesh exporteren…** als OBJ, PLY, STL, GLB, DXF, DWG of IFC. Kies voor binair glTF een bestandsnaam die eindigt op `.glb`, bijvoorbeeld `kamer.glb`. **Oppervlak textureren…** schrijft een mesh met kleuren als OBJ met een MTL-bestand en PNG-textuurpagina's.
+
+Open een geëxporteerde GLB in Blender 5.3 via **File → Import → glTF 2.0**. Kies in de instellingen van de weergave **Solid** bij het kleurtype **Attribute** om de oorspronkelijke vertexkleuren te zien.
 
 ![De kaart Puntenwolk meshen op de stap Methode met de vier methoden Gesloten mesh, Terreinmesh, 3D-oppervlak en Vlakken, en daaronder waar het op werkt: de actieve scan rooms.e57, de snedebox en de selectie](https://raw.githubusercontent.com/OpenAEC-Foundation/open-pointcloud-studio/main/docs/wiki/images/mesh-methoden.png)
 

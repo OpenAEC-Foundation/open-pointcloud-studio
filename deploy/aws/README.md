@@ -122,6 +122,12 @@ the stack under the host name, with its load step: two section drawings of
 the largest test file at once, then health. Further parameters go after the
 host name as `NAME=VALUE`, such as `DesiredCount=2`.
 
+To stop the tasks, pass `DesiredCount=0 --execute`. This operation needs
+no smoke key. After applying the change, the script reads the task count
+from the stack and skips the HTTP test when the count is zero. To start
+serving again, pass a positive count and supply `OPENAEC_SMOKE_KEY` so
+the script can check the service through its load balancer.
+
 Then point the DNS record of the host name at the output
 `LoadBalancerDnsName` (a CNAME, or an alias record in Route 53), and run the
 smoke test once more by the name alone:

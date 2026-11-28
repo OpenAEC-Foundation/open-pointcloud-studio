@@ -2447,10 +2447,12 @@ mod tests {
         let mut studio = Studio::default();
         studio.clouds.push(CloudEntry {
             load_identity: Arc::clone(&cloud),
+            las_grid: None,
             index_import_id: None,
             cloud,
             transform: CloudTransform::default(),
             centroid_cache: None,
+            selected_count_cache: Default::default(),
             mesh: None,
             mesh_topology: None,
             mesh_visible: false,

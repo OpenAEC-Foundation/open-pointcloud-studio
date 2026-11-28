@@ -2536,6 +2536,31 @@ mod tests {
     }
 
     #[test]
+    fn resizing_an_inactive_photo_pane_preserves_the_model_focus() {
+        use crate::document_panes::{layout::Side, Action};
+        use crate::view_tabs::TabId;
+
+        let (mut studio, _directory, source) = studio_with_photos();
+        let photo = TabId::Photo(source.clone()).document_key().unwrap();
+        let _ = studio.update(Message::Photos(PhotoAction::Enter(source, 0)));
+        let _ = studio.update(Message::Documents(Action::SplitCurrent(Side::Right)));
+        let _ = studio.show_tab(&TabId::Model).unwrap();
+        let active = studio.documents.as_ref().unwrap().workspace.active_pane;
+        let camera = studio.camera_value();
+
+        let _ = studio.update(Message::Documents(Action::Input(
+            photo,
+            Box::new(Message::ViewportSize(iced::Size::new(320., 240.))),
+        )));
+        assert_eq!(studio.shown_tab(), Some(TabId::Model));
+        assert_eq!(
+            studio.documents.as_ref().unwrap().workspace.active_pane,
+            active
+        );
+        assert_eq!(studio.camera_value(), camera);
+    }
+
+    #[test]
     fn another_pane_keeps_loading_its_photo_without_moving_the_active_model() {
         use crate::document_panes::{layout::Side, runtime::Runtime};
         let (mut studio, _directory, source) = studio_with_photos();

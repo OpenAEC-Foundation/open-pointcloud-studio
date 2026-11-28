@@ -286,6 +286,8 @@ pub(crate) mod check {
     fn attribute_count(name: &str) -> Option<usize> {
         Some(match name {
             "IFCPROJECT" => 9,
+            "IFCDOCUMENTREFERENCE" => 5,
+            "IFCRELASSOCIATESDOCUMENT" => 6,
             "IFCSITE" => 14,
             "IFCBUILDING" => 12,
             "IFCBUILDINGSTOREY" => 10,

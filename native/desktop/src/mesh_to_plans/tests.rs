@@ -486,7 +486,6 @@ fn busy(studio: &mut Studio) -> Vec<&'static str> {
 
 #[test]
 fn a_cancelled_job_stops_within_one_poll() {
-    use std::time::{Duration, Instant};
     // The work the window gives a step, cancelled while it runs.
     let input = pipeline::JobInput {
         steps: WizardStep::ALL.to_vec(),
@@ -497,23 +496,29 @@ fn a_cancelled_job_stops_within_one_poll() {
         prepare_basis: None,
     };
     let control = pipeline::Control::default();
-    std::thread::scope(|scope| {
-        let worker = scope.spawn(|| pipeline::run(&input, &control));
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while control.snapshot().done < 2 {
-            assert!(Instant::now() < deadline, "the job did not start");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let asked = Instant::now();
-        control.cancel();
-        let ended = worker.join().unwrap();
-        let took = asked.elapsed();
+    let mut waits = 0;
+    let ended = pipeline::run_with_wait(&input, &control, |tick| {
+        // Cancel just as the third wait begins. The worker may finish this
+        // delay but must check the request before scheduling any more work.
         assert!(
-            matches!(ended, Err(pointcloud_core::LoadError::Cancelled)),
-            "{ended:?}"
+            !control.cancelling(),
+            "scheduled another wait after cancellation"
         );
-        assert!(took < pipeline::POLL, "stopped after {took:?}");
+        assert!(
+            tick < pipeline::POLL,
+            "worker delay {tick:?} exceeds the poll interval"
+        );
+        waits += 1;
+        if waits == 3 {
+            assert_eq!(control.snapshot().done, 2);
+            control.cancel();
+        }
     });
+    assert!(
+        matches!(ended, Err(pointcloud_core::LoadError::Cancelled)),
+        "{ended:?}"
+    );
+    assert_eq!(waits, 3);
     assert!(control.finished().is_empty());
     assert_eq!(control.snapshot().place, 0);
 }

@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -19,9 +19,11 @@ mod e57_limits;
 mod e57_parallel;
 mod e57_points;
 mod e57_quick;
+mod e57_write;
 mod export;
 mod glb;
 pub mod grid2d;
+mod las_crs;
 pub mod local_fit;
 mod mesh_formats;
 mod mesh_photo;
@@ -99,9 +101,9 @@ pub use export::{
 };
 pub use mesh_formats::{read_off_mesh, read_stl_mesh};
 pub use mesh_quality::{
-    mesh_deviation, mesh_deviation_progress, mesh_topology, mesh_topology_by_position,
-    mesh_topology_progress, open_boundary_vertices, open_boundary_vertices_progress, MeshDeviation,
-    MeshTopology,
+    mesh_deviation, mesh_deviation_progress, mesh_source_deviation, mesh_topology,
+    mesh_topology_by_position, mesh_topology_progress, open_boundary_vertices,
+    open_boundary_vertices_progress, MeshDeviation, MeshTopology,
 };
 pub use mesh_simplify::{simplify_mesh, simplify_mesh_progress, SimplifiedMesh};
 pub use mesh_texture::{
@@ -120,8 +122,8 @@ pub use obj_mesh::{
     MAX_VERTICES as MAX_MESH_VERTICES,
 };
 pub use octree::{
-    disk_caches, set_disk_caches, IndexConfig, IndexProgress, IndexStage, IndexedNode,
-    IndexedPoint, OctreeIndex,
+    disk_caches, minimum_index_bytes, set_disk_caches, IndexConfig, IndexProgress, IndexStage,
+    IndexedNode, IndexedPoint, OctreeIndex,
 };
 pub use oriented_box::{bounds_corners, normalized_degrees, OrientedBox};
 pub use ply_mesh::read_ply_mesh;
@@ -420,6 +422,19 @@ impl SourceStamp {
             length: metadata.len(),
             modified: metadata.modified().ok(),
         })
+    }
+}
+
+/// Bytes after the buffered cursor when the source reports a usable file size.
+/// For streams and generated files with unknown size, readers check records as they go.
+fn remaining_file_bytes(reader: &mut BufReader<File>) -> std::io::Result<Option<u64>> {
+    let metadata = reader.get_ref().metadata()?;
+    if metadata.is_file() && metadata.len() > 0 {
+        Ok(Some(
+            metadata.len().saturating_sub(reader.stream_position()?),
+        ))
+    } else {
+        Ok(None)
     }
 }
 
@@ -859,6 +874,20 @@ pub fn read_scan_images(
 /// Open LAS/LAZ metadata immediately, before the preview sampling pass finishes.
 /// The caller may replace this cloud with `open`'s fully checked result later.
 pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> {
+    open_las_header_with_grid(path).map(|(cloud, _)| cloud)
+}
+
+/// The per-axis coefficients that map a stored LAS integer to a source coordinate.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct LasCoordinateGrid {
+    pub scale: [f64; 3],
+    pub offset: [f64; 3],
+}
+
+/// Read the header-only cloud and its coordinate grid from the same LAS/LAZ header.
+pub fn open_las_header_with_grid(
+    path: impl AsRef<Path>,
+) -> Result<(PointCloud, LasCoordinateGrid), LoadError> {
     let path = path.as_ref();
     let extension = path
         .extension()
@@ -886,7 +915,13 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
     {
         return Err(LoadError::InvalidData("empty or invalid LAS header".into()));
     }
-    Ok(PointCloud {
+    let transforms = header.transforms();
+    let axes = [transforms.x, transforms.y, transforms.z];
+    let grid = LasCoordinateGrid {
+        scale: axes.map(|axis| axis.scale),
+        offset: axes.map(|axis| axis.offset),
+    };
+    let cloud = PointCloud {
         path: path.to_path_buf(),
         total_points: count,
         bounds,
@@ -901,7 +936,8 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         provisional: false,
         source_stamp: Some(stamp),
         scan_ranges_known: true,
-    })
+    };
+    Ok((cloud, grid))
 }
 
 /// Sample LAS/LAZ in bounded, evenly spaced source ranges. Header bounds and
@@ -941,6 +977,7 @@ pub fn open_las_preview(
             "LAZ chunks of varying size cannot be sampled in place".into(),
         ));
     }
+    let format = *reader.header().point_format();
     for block in 0..blocks {
         let start = if blocks == 1 {
             0
@@ -952,7 +989,7 @@ pub fn open_las_preview(
             .min(count - start)
             .min(target - cloud.points.len() as u64);
         for (offset, point) in reader.read_points(length)?.into_iter().enumerate() {
-            cloud.points.push(convert_las_point(&point));
+            cloud.points.push(convert_las_point(&point, format));
             cloud.point_ordinals.push(if compressed && count > target {
                 u64::MAX
             } else {
@@ -992,7 +1029,7 @@ fn visit_points_with_poses(
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "las" | "laz" => read_las(path, push),
+        "las" | "laz" => read_las(path, &mut |point, _overlap| push(point)),
         "ply" => ply::read(path, push),
         "obj" => mesh_points::read_obj(path, push),
         "off" => mesh_points::read_off(path, push),
@@ -1001,7 +1038,7 @@ fn visit_points_with_poses(
         "pcd" => pcd::read(path, push, scan_begin),
         "dxf" => dxf::read(path, push),
         "e57" => e57_points::read(path, push, scan_begin),
-        "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, extension == "pts"),
+        "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, &extension),
         _ => Err(LoadError::UnsupportedFormat(extension)),
     }
 }
@@ -1095,7 +1132,7 @@ impl Collector {
 
 fn read_las(
     path: &Path,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
 ) -> Result<(), LoadError> {
     let mut reader = las::Reader::from_path(path)?;
     // The LAZ reader only uses its parallel decompressor for read_points_into;
@@ -1111,9 +1148,10 @@ fn read_las(
 
 fn read_las_batches(
     reader: &mut las::Reader,
-    push: &mut impl FnMut(Point) -> Result<(), LoadError>,
+    push: &mut impl FnMut(Point, bool) -> Result<(), LoadError>,
     batch_limit: usize,
 ) -> Result<(), LoadError> {
+    let format = *reader.header().point_format();
     let mut batch = Vec::with_capacity(batch_limit);
     loop {
         batch.clear();
@@ -1121,13 +1159,13 @@ fn read_las_batches(
             break;
         }
         for point in &batch {
-            push(convert_las_point(point))?;
+            push(convert_las_point(point, format), point.is_overlap)?;
         }
     }
     Ok(())
 }
 
-fn convert_las_point(point: &las::Point) -> Point {
+fn convert_las_point(point: &las::Point, format: las::point::Format) -> Point {
     let rgb = point.color.map(|color| {
         let channels = [color.red, color.green, color.blue];
         if channels.iter().all(|channel| *channel <= 255) {
@@ -1140,15 +1178,22 @@ fn convert_las_point(point: &las::Point) -> Point {
         xyz: [point.x, point.y, point.z],
         rgb,
         intensity: Some(point.intensity),
-        classification: Some(u8::from(point.classification)),
+        // las-rs exposes legacy class 12 as Unclassified plus an overlap flag.
+        // Extended records encode the class and the flag independently.
+        classification: Some(if !format.is_extended && point.is_overlap {
+            12
+        } else {
+            u8::from(point.classification)
+        }),
     }
 }
 
 fn read_text(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pts: bool,
+    extension: &str,
 ) -> Result<(), LoadError> {
+    let mut class_column = None;
     let reader = BufReader::new(File::open(path)?);
     let mut first_content_line = true;
     let mut seen_points = false;
@@ -1158,12 +1203,12 @@ fn read_text(
         if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
             continue;
         }
-        if pts && first_content_line && line.parse::<u64>().is_ok() {
+        if extension == "pts" && first_content_line && line.parse::<u64>().is_ok() {
             first_content_line = false;
             continue;
         }
         first_content_line = false;
-        let fields: Vec<&str> = line
+        let mut fields: Vec<&str> = line
             .split(|character: char| {
                 character.is_ascii_whitespace() || character == ',' || character == ';'
             })
@@ -1180,12 +1225,38 @@ fn read_text(
         let Some(coordinates) = coordinates else {
             // Allow a single header row such as x,y,z,r,g,b.
             if !seen_points && fields[0].eq_ignore_ascii_case("x") {
+                if extension == "csv" {
+                    class_column = fields
+                        .iter()
+                        .enumerate()
+                        .skip(3)
+                        .find(|(_, field)| field.eq_ignore_ascii_case("classification"))
+                        .map(|(index, _)| (index, fields.len()));
+                }
                 continue;
             }
             return Err(LoadError::InvalidData(format!(
                 "invalid coordinate on line {}",
                 line_number + 1
             )));
+        };
+        // Classification is a named CSV attribute, outside the positional
+        // XYZ/intensity/RGB layouts used by the other text formats.
+        let classification = if let Some((index, width)) = class_column {
+            if fields.len() != width {
+                return Err(LoadError::InvalidData(format!(
+                    "expected {width} CSV fields on line {}",
+                    line_number + 1
+                )));
+            }
+            Some(fields.remove(index).parse::<u8>().map_err(|_| {
+                LoadError::InvalidData(format!(
+                    "invalid classification on line {}",
+                    line_number + 1
+                ))
+            })?)
+        } else {
+            None
         };
         let has_intensity = fields.len() == 4 || fields.len() >= 7;
         let intensity = if has_intensity {
@@ -1220,7 +1291,7 @@ fn read_text(
             xyz: [coordinates[0], coordinates[1], coordinates[2]],
             rgb,
             intensity,
-            classification: None,
+            classification,
         })?;
         seen_points = true;
     }
@@ -1713,6 +1784,42 @@ mod tests {
     }
 
     #[test]
+    fn classified_csv_keeps_intensity_and_rgb_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("points.CSV");
+        for (header, row, class, intensity, rgb) in [
+            ("classification", "0", 0, None, None),
+            ("intensity,classification", "0.5,12", 12, Some(32768), None),
+            ("Classification,intensity", "5,0.5", 5, Some(32768), None),
+            (
+                "red,green,blue,classification",
+                "1,2,3,255",
+                255,
+                None,
+                Some([1, 2, 3]),
+            ),
+            (
+                "intensity,red,green,blue,classification",
+                "0.5,1,2,3,42",
+                42,
+                Some(32768),
+                Some([1, 2, 3]),
+            ),
+        ] {
+            std::fs::write(&file, format!("x,y,z,{header}\n1,2,3,{row}\n")).unwrap();
+            let cloud = open(&file, 10).unwrap();
+            let point = cloud.points[0];
+            assert_eq!(point.classification, Some(class));
+            assert_eq!(point.intensity, intensity);
+            assert_eq!(point.rgb, rgb);
+        }
+        for row in ["1,2,3", "1,2,3,256", "1,2,3,-1"] {
+            std::fs::write(&file, format!("x,y,z,classification\n{row}\n")).unwrap();
+            assert!(open(&file, 10).unwrap_err().to_string().contains("line 2"));
+        }
+    }
+
+    #[test]
     fn parses_pts_intensity_before_rgb() {
         let path = std::env::temp_dir().join(format!("pointcloud-core-{}.pts", std::process::id()));
         std::fs::write(&path, "1\n1 2 3 128 10 20 30\n").unwrap();
@@ -1732,6 +1839,18 @@ mod tests {
             ));
             let mut builder = las::Builder::from((1, 2));
             builder.point_format = las::point::Format::new(2).unwrap();
+            builder.transforms.x = las::Transform {
+                scale: 0.125,
+                offset: 10.5,
+            };
+            builder.transforms.y = las::Transform {
+                scale: 0.0625,
+                offset: -1.25,
+            };
+            builder.transforms.z = las::Transform {
+                scale: 0.015625,
+                offset: 48.5,
+            };
             let header = builder.into_header().unwrap();
             let mut writer = las::Writer::from_path(&path, header).unwrap();
             writer
@@ -1751,7 +1870,9 @@ mod tests {
                 .unwrap();
             drop(writer);
 
-            let quick = open_las_header(&path).unwrap();
+            let (quick, grid) = open_las_header_with_grid(&path).unwrap();
+            assert_eq!(grid.scale, [0.125, 0.0625, 0.015625]);
+            assert_eq!(grid.offset, [10.5, -1.25, 48.5]);
             assert_eq!(quick.total_points, 1);
             assert_eq!(quick.bounds.min, [12.0, 34.0, 56.0]);
             assert!(quick.points.is_empty());
@@ -1810,7 +1931,7 @@ mod tests {
             let mut points = Vec::new();
             read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     points.push(point);
                     Ok(())
                 },
@@ -1828,7 +1949,7 @@ mod tests {
             let mut visited = Vec::new();
             let stopped = read_las_batches(
                 &mut reader,
-                &mut |point| {
+                &mut |point, _overlap| {
                     visited.push(point.xyz[0]);
                     if visited.len() == 3 {
                         Err(LoadError::Cancelled)

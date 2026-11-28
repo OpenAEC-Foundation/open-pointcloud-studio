@@ -32,6 +32,7 @@
 //! coordinate system of the scene is not known, so the file holds no map
 //! conversion.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -63,7 +64,11 @@ pub(crate) fn local_origin(model: &Model3d) -> [f64; 3] {
 
 /// Write the model to `destination` and return the size of the file. The
 /// file is written beside it and put in place when complete.
-pub(crate) fn write_model_ifc(model: &Model3d, destination: &Path) -> Result<u64, LoadError> {
+pub(crate) fn write_model_ifc(
+    model: &Model3d,
+    destination: &Path,
+    scan_file_name: Option<&OsStr>,
+) -> Result<u64, LoadError> {
     super::cad::validate(model)?;
     let parent = destination
         .parent()
@@ -79,7 +84,7 @@ pub(crate) fn write_model_ifc(model: &Model3d, destination: &Path) -> Result<u64
             out: BufWriter::new(temporary.as_file_mut()),
             next: 1,
         };
-        write_file(model, &name, &mut writer)?;
+        write_file(model, &name, scan_file_name, &mut writer)?;
         writer.out.flush()?;
     }
     temporary.as_file_mut().sync_all()?;
@@ -137,7 +142,28 @@ fn reference_list(ids: &[u64]) -> String {
     format!("({})", inner.join(","))
 }
 
-fn write_file(model: &Model3d, file_name: &str, step: &mut Step) -> Result<(), LoadError> {
+/// Reference the anchor scan beside the IFC. Only URI-unreserved filename
+/// bytes are literal, so e.g. a '#' in the scan name cannot start a fragment.
+fn sidecar_uri(name: &OsStr) -> String {
+    use std::fmt::Write;
+
+    let mut uri = String::from("./");
+    for &byte in name.as_encoded_bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            write!(uri, "%{byte:02X}").expect("writing to a String");
+        }
+    }
+    uri
+}
+
+fn write_file(
+    model: &Model3d,
+    file_name: &str,
+    scan_file_name: Option<&OsStr>,
+    step: &mut Step,
+) -> Result<(), LoadError> {
     let application = string(&format!(
         "Open Pointcloud Studio {}",
         env!("CARGO_PKG_VERSION")
@@ -198,6 +224,18 @@ fn write_file(model: &Model3d, file_name: &str, step: &mut Step) -> Result<(), L
             }),
         ),
     )?;
+    if let Some(name) = scan_file_name {
+        let location = string(&sidecar_uri(name));
+        let label = string(&name.to_string_lossy());
+        let document = step.add("IFCDOCUMENTREFERENCE", &format!("{location},$,{label},$,$"))?;
+        step.add(
+            "IFCRELASSOCIATESDOCUMENT",
+            &format!(
+                "{},$,'Anchor scan',$,(#{project}),#{document}",
+                string(&guid())
+            ),
+        )?;
+    }
     let origin = local_origin(model);
     let site_point = step.point(origin)?;
     let site_axes = step.add("IFCAXIS2PLACEMENT3D", &format!("#{site_point},$,$"))?;

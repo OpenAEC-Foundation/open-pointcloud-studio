@@ -43,3 +43,7 @@ image = { version = "0.24", default-features = false, features = ["jpeg"] }
 [[example]]
 name = "demo_scenes"
 test = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
+# Read the process peak RSS for the loading benchmark.
+libc = "0.2"

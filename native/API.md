@@ -432,6 +432,9 @@ destination in a folder that exists, and its extension chooses the format:
   solids (`3DSOLID`) are written: a CAD program can turn the meshes into
   surfaces or solids where it offers that.
 - `.ifc`: IFC4 as a STEP file, with a project, site, building and storey.
+  The project references the anchor scan via `IfcRelAssociatesDocument`.
+  Its `IfcDocumentReference.Location` is a relative URI for the original
+  filename. Place the scan next to the IFC when distributing them together.
   Every face is an `IfcBuildingElementProxy` with object type
   `Plane (wall)` and so on, or `Cylinder`, as the class is a direction and
   not a building element. A flat face is an `IfcPolygonalFaceSet` with a
@@ -441,7 +444,10 @@ destination in a folder that exists, and its extension chooses the format:
   representation; a cylinder seen from inside is the triangulated scanned
   surface. The property set `OPS_ScanGeometry` holds the class, area,
   coverage and residuals of a face and the radius, length and arc of a
-  cylinder. Coordinates far from zero are placed as for `export_mesh`.
+  cylinder. For both planes and cylinders, `ResidualMean` is the signed mean
+  distance and `ResidualMeanAbs` is the mean absolute distance. These and
+  `ResidualRms`, `ResidualP95` and `ResidualMax` are lengths in metres.
+  Coordinates far from zero are placed as for `export_mesh`.
 
 The complete job has `operation` (`export_faces`), `path`, `format` (`json`,
 `obj`, `dxf`, `dwg` or `ifc`), `planes`, `cylinders`, `edges`, `bytes` and `stale`. The file is
@@ -1108,9 +1114,10 @@ Native pane layouts and source references are stored atomically in
 without explicit input files reopens its sources and restores the main-window
 pane tree, document looks, source affine edits/visibility and shared section.
 The file contains references and display state; unsaved point edits are not
-recovered from it. Unsupported or invalid files are preserved. Current startup
-docks satellite documents into the main window while screen identity cannot be
-verified; retaining verified monitor placements remains pending.
+recovered from it. Unsupported or invalid files are preserved. On startup each
+satellite's pane tree returns to the main window with its splits, tab selections
+and links intact. Reopening a window on its original monitor requires platform
+monitor identification, which is still pending.
 
 `list_tabs` answers with `tabs`, each with its `index`, `name` (`3D model`
 for the 3D model in every language, as `project_browser` names it), `kind`
@@ -1497,6 +1504,8 @@ the removed points without changing the source file. Photo colours given or
 removed are an edit as well: `undo_delete` takes back the latest edit of
 either kind, at most eight, and `redo_delete` does it again.
 
+For a LAS or LAZ layer, `status.result.clouds[].las_grid` contains the source header’s `scale` and `offset` arrays in X, Y, Z order. Each source coordinate equals the stored integer multiplied by its scale plus its offset. Other layers return `null`. The layer’s live edits are reported separately in `transform`.
+
 ## Changes and undo
 
 `undo_delete` takes back the latest edit and `redo_delete` does it again.
@@ -1506,6 +1515,11 @@ kept, of all layers together, and a new edit ends what `redo_delete` could
 do again. Earlier photo colours are kept up to about 1 GiB; beyond that a
 colouring lets go of the oldest edits. `remove` of any layer empties this
 history for every layer.
+
+When a selection overlaps an earlier deletion, the global and per-layer selected
+counts include only the points still present. Undoing a second deletion restores
+only the points hidden by that second edit. Clearing the selection also drops
+any selected ordinals currently hidden by a deletion.
 
 `translate` and `scale` are taken back with `reset_transform`, which puts
 the active layer back at the coordinates of its source; `reset_transform`
@@ -1978,6 +1992,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 19 | Unreleased | Each layer in `status` reports `las_grid` with the LAS/LAZ header scales and offsets, or `null` for other formats. |
 | 18 | Unreleased | `texture_mesh` resamples source-cloud colours with bounded distance/normal/outlier filtering and reports measured versus vertex fallback coverage, sample count and sampling limits. Photo visibility also uses bounded source-cloud depth. Includes revisions 13–17. |
 | 17 | Unreleased | Optional linked photo/3D panes: `set_pane_linked`, per-scene `linked_photo_count` in `list_panes`, measured photo camera indicators and linked photo selection without moving the scene camera. Includes revisions 13–16. |
 | 16 | Unreleased | Native document panes and satellite windows: `list_panes`, `split_pane`, `tear_off_tab`, `dock_pane_window`. Screenshot capture follows the active document window. Includes revisions 13–15. |

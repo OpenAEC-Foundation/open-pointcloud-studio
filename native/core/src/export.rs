@@ -176,7 +176,8 @@ fn reencode_las_full(
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
     let mut reader = las::Reader::from_path(&cloud.path)?;
-    let mut builder = las::Builder::from(reader.header().clone());
+    let mut builder =
+        las::Builder::from(crate::las_crs::export_header(&cloud.path, reader.header())?);
     builder.point_format.is_compressed = format == ExportFormat::Laz;
     builder.vlrs.retain(|vlr| {
         !(vlr.record_id == 22204 && vlr.user_id.eq_ignore_ascii_case("laszip encoded"))
@@ -197,6 +198,9 @@ fn reencode_las_full(
             let read = reader.read_points_into(batch_limit as u64, &mut batch)?;
             if read == 0 {
                 break;
+            }
+            for point in &mut batch {
+                point.scan_angle = las_scan_angle_for_write(point.scan_angle);
             }
             writer.write_points(&batch)?;
             count += read;
@@ -778,10 +782,31 @@ fn export_e57_map_count(
         for extension in reader.extensions() {
             writer.register_extension(extension)?;
         }
+    } else {
+        writer.set_coordinate_metadata(crate::scene_export::e57_coordinate_metadata([cloud])?);
     }
-    let mut source_count = 0u64;
-    let mut written_count = 0u64;
+    let written_count = if let Some((scale, translation)) =
+        image_transform.filter(|_| crate::scene_export::has_scan_blocks(&cloud.path))
     {
+        let source = crate::scene_export::SceneSource {
+            cloud,
+            transform: crate::scene_transform::SceneTransform {
+                scale,
+                translation,
+                ..Default::default()
+            },
+        };
+        crate::scene_export::write_scan_blocks(
+            &mut writer,
+            &source,
+            prototype,
+            &scan_guid,
+            &mut map,
+            &mut |_| Ok(()),
+        )?
+    } else {
+        let mut source_count = 0u64;
+        let mut written_count = 0u64;
         let mut scan = writer.add_pointcloud(&scan_guid, prototype)?;
         scan.set_name(Some("Open Pointcloud Studio export".into()));
         visit_points(&cloud.path, &mut |point| {
@@ -819,14 +844,15 @@ fn export_e57_map_count(
                 cloud.total_points
             )));
         }
-        if let Some(expected_count) = expected_count {
-            if written_count != expected_count {
-                return Err(LoadError::InvalidData(format!(
-                    "selection changed during export (expected {expected_count} points, wrote {written_count})"
-                )));
-            }
-        }
         scan.finalize()?;
+        written_count
+    };
+    if let Some(expected_count) = expected_count {
+        if written_count != expected_count {
+            return Err(LoadError::InvalidData(format!(
+                "selection changed during export (expected {expected_count} points, wrote {written_count})"
+            )));
+        }
     }
     if let Some((scale, translation)) = image_transform.filter(|_| crate::is_e57(&cloud.path)) {
         let mut reader = super::e57_points::open_reader(&cloud.path)?;
@@ -850,12 +876,6 @@ fn export_e57_map_count(
             },
             &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
         )?;
-        writer.finalize_customized_xml(|xml| {
-            Ok(xml
-                .replace("<readius ", "<radius ")
-                .replace("<readius>", "<radius>")
-                .replace("</readius>", "</radius>"))
-        })?;
     } else {
         let (scale, translation) = image_transform.unwrap_or((1.0, [0.0; 3]));
         crate::photo_edits::write_added(
@@ -868,8 +888,8 @@ fn export_e57_map_count(
             },
             Some(&scan_guid),
         )?;
-        writer.finalize()?;
     }
+    crate::e57_write::finalize(writer, &temporary)?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -1289,13 +1309,7 @@ fn export_e57_filtered_colours_count(
         },
         &crate::photo_edits::PhotoEdits::load(&cloud.path)?,
     )?;
-    // e57 0.11.13 writes the cylindrical radius element as "readius".
-    writer.finalize_customized_xml(|xml| {
-        Ok(xml
-            .replace("<readius ", "<radius ")
-            .replace("<readius>", "<radius>")
-            .replace("</readius>", "</radius>"))
-    })?;
+    crate::e57_write::finalize(writer, &temporary)?;
     if SourceStamp::read(&cloud.path)? != expected_stamp {
         return Err(LoadError::InvalidData(
             "source changed during export".into(),
@@ -1447,11 +1461,19 @@ pub(crate) fn copy_e57_images_scene<T: std::io::Read + Seek>(
     Ok(())
 }
 
+/// las 0.9.11 decodes a scaled integer angle to f32 degrees, then truncates
+/// degrees / 0.006 on write. Move one float step away from zero to keep the
+/// decoded value on the original side of the integer boundary.
+fn las_scan_angle_for_write(degrees: f32) -> f32 {
+    degrees.abs().next_up().copysign(degrees)
+}
+
 fn update_las_record(
     raw_point: &mut las::Point,
     original: Point,
     point: Point,
     transforms: &[las::Transform; 3],
+    format: las::point::Format,
 ) -> Result<(), LoadError> {
     if !point.xyz.iter().all(|value| value.is_finite()) {
         return Err(LoadError::InvalidData(
@@ -1462,6 +1484,7 @@ fn update_las_record(
         transform.inverse(point.xyz[axis])?;
     }
     [raw_point.x, raw_point.y, raw_point.z] = point.xyz;
+    raw_point.scan_angle = las_scan_angle_for_write(raw_point.scan_angle);
     if point.rgb != original.rgb {
         raw_point.color = point.rgb.map(|rgb| {
             las::Color::new(
@@ -1476,7 +1499,7 @@ fn update_las_record(
     }
     if point.classification != original.classification {
         let class_code = point.classification.unwrap_or(1);
-        raw_point.is_overlap = class_code == 12;
+        raw_point.is_overlap = class_code == 12 || (format.is_extended && raw_point.is_overlap);
         raw_point.classification =
             las::point::Classification::new(if class_code == 12 { 1 } else { class_code })?;
     }
@@ -1527,7 +1550,22 @@ pub fn merge_las_map_count(
             .checked_add(source.total_points)
             .ok_or_else(|| LoadError::InvalidData("merged point count overflows".into()))?;
         let reader = las::Reader::from_path(&source.path)?;
-        headers.push(reader.header().clone());
+        headers.push(crate::las_crs::export_header(
+            &source.path,
+            reader.header(),
+        )?);
+    }
+    // One header describes the timestamps of every point in the output.
+    let mut time_types = headers
+        .iter()
+        .filter(|header| header.point_format().has_gps_time)
+        .map(las::Header::gps_time_type);
+    if let Some(first_time) = time_types.next() {
+        if time_types.any(|time| time != first_time) {
+            return Err(LoadError::InvalidData(
+                "LAS/LAZ merge mixes GPS week time and adjusted standard GPS time; convert the source timestamps to one time convention before merging".into(),
+            ));
+        }
     }
     let first = &headers[0];
     let mut first_format = *first.point_format();
@@ -1555,6 +1593,13 @@ pub fn merge_las_map_count(
             || vlrs != first_vlrs
             || header.evlrs() != first.evlrs()
         {
+            // Callers may retry incompatible layouts with the common-field scene
+            // writer. That writer cannot represent LAS extra dimensions.
+            if headers.iter().any(|h| h.point_format().extra_bytes != 0) {
+                return Err(LoadError::InvalidData(
+                    "LAS/LAZ merge would lose extra dimensions; align the source point formats, coordinate grids and metadata before merging".into(),
+                ));
+            }
             return Err(LoadError::InvalidData(
                 "LAS/LAZ sources have incompatible point formats, coordinate grids or metadata"
                     .into(),
@@ -1591,7 +1636,8 @@ pub fn merge_las_map_count(
     let stream_result = (|| -> Result<(), LoadError> {
         for (source_index, source) in sources.iter().enumerate() {
             let mut reader = las::Reader::from_path(&source.path)?;
-            let read_limit = if reader.header().point_format().is_compressed {
+            let input_format = *reader.header().point_format();
+            let read_limit = if input_format.is_compressed {
                 PARALLEL_LAZ_BATCH_POINTS
             } else {
                 LAS_BATCH_POINTS
@@ -1604,9 +1650,15 @@ pub fn merge_las_map_count(
                     break;
                 }
                 for mut raw_point in input.drain(..) {
-                    let original = convert_las_point(&raw_point);
+                    let original = convert_las_point(&raw_point, input_format);
                     if let Some(mapped) = map(source_index, ordinal, original) {
-                        update_las_record(&mut raw_point, original, mapped, &transforms)?;
+                        update_las_record(
+                            &mut raw_point,
+                            original,
+                            mapped,
+                            &transforms,
+                            input_format,
+                        )?;
                         output.push(raw_point);
                         written += 1;
                         if output.len() == output_limit {
@@ -1677,9 +1729,23 @@ fn export_las_map_count(
         .filter(|extension| {
             extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
         })
-        .map(|_| las::Reader::from_path(&cloud.path).map(|reader| reader.header().clone()))
+        .map(|_| {
+            let reader = las::Reader::from_path(&cloud.path)?;
+            crate::las_crs::export_header(&cloud.path, reader.header())
+        })
         .transpose()?;
-    let extended = cloud.total_points > u64::from(u32::MAX);
+    let extended = if let Some(header) = &source_header {
+        header.point_format().is_extended
+    } else if let Some(extended) = preview_extended_las_format(cloud) {
+        extended
+    } else {
+        let mut extended = false;
+        visit_points(&cloud.path, &mut |point| {
+            extended |= has_extended_class(&point);
+            Ok(())
+        })?;
+        extended
+    };
     let mut builder = if let Some(header) = &source_header {
         let mut builder = Builder::from(header.clone());
         builder.vlrs.retain(|vlr| {
@@ -1729,7 +1795,8 @@ fn export_las_map_count(
     let stream_result = if source_header.is_some() {
         (|| -> Result<(), LoadError> {
             let mut reader = las::Reader::from_path(&cloud.path)?;
-            let read_limit = if reader.header().point_format().is_compressed {
+            let input_format = *reader.header().point_format();
+            let read_limit = if input_format.is_compressed {
                 PARALLEL_LAZ_BATCH_POINTS
             } else {
                 LAS_BATCH_POINTS
@@ -1741,13 +1808,13 @@ fn export_las_map_count(
                     break;
                 }
                 for mut raw_point in read_batch.drain(..) {
-                    let original = convert_las_point(&raw_point);
+                    let original = convert_las_point(&raw_point, input_format);
                     let ordinal = source_count;
                     source_count += 1;
                     let Some(point) = map(ordinal, original) else {
                         continue;
                     };
-                    update_las_record(&mut raw_point, original, point, &transforms)?;
+                    update_las_record(&mut raw_point, original, point, &transforms, input_format)?;
                     batch.push(raw_point);
                     if batch.len() == batch_limit {
                         writer.write_points(&batch)?;
@@ -2035,9 +2102,28 @@ pub(crate) fn ply_binary_point_bytes(cloud: &PointCloud) -> u64 {
         + u64::from(cloud.has_classification)
 }
 
-/// The length of one point record of a LAS or LAZ export of `cloud`, before
-/// compression: that of the source header for a LAS or LAZ source, which
-/// the export keeps, and else the point format `export_las_map_count` takes.
+fn has_extended_class(point: &Point) -> bool {
+    point.classification.is_some_and(|code| code > 31)
+}
+
+/// A bounded preview can prove that extended records are needed, but only a
+/// complete preview can rule them out for a classified source.
+fn preview_extended_las_format(cloud: &PointCloud) -> Option<bool> {
+    if cloud.total_points > u64::from(u32::MAX) {
+        return Some(true);
+    }
+    if !cloud.has_classification {
+        return Some(false);
+    }
+    if cloud.points.iter().any(has_extended_class) {
+        return Some(true);
+    }
+    (cloud.points.len() as u64 == cloud.total_points).then_some(false)
+}
+
+/// Upper bound on the size of an uncompressed LAS or LAZ point record.
+/// Preserve the source record length for LAS inputs. Budget for extended
+/// records when the preview cannot rule out eight-bit classification.
 pub(crate) fn las_point_bytes(cloud: &PointCloud) -> u64 {
     let source_is_las = cloud
         .path
@@ -2051,7 +2137,7 @@ pub(crate) fn las_point_bytes(cloud: &PointCloud) -> u64 {
             return u64::from(reader.header().point_format().len());
         }
     }
-    let extended = cloud.total_points > u64::from(u32::MAX);
+    let extended = preview_extended_las_format(cloud).unwrap_or(true);
     las::point::Format::new(match (extended, cloud.has_rgb) {
         (false, false) => 0,
         (false, true) => 2,
@@ -2114,6 +2200,44 @@ mod tests {
     use crate::{open, Bounds};
 
     #[test]
+    fn edited_ptx_export_keeps_station_frames_and_filtered_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stations.ptx");
+        fs::write(&path, crate::ptx::tests::THREE_BLOCKS).unwrap();
+        let mut cloud = open(&path, 100).unwrap();
+        cloud.has_rgb = true;
+        let out = dir.path().join("edited.e57");
+        let offset = [100., 200., 300.];
+        let map = |ordinal: u64, mut point: Point| {
+            point.xyz = std::array::from_fn(|axis| point.xyz[axis] * 2. + offset[axis]);
+            point.rgb = Some([12, 34, 56]);
+            (ordinal >= 3).then_some(point)
+        };
+        export_e57_map_with_images(&cloud, &out, Some(3), 2., offset, map).unwrap();
+        let scans = crate::e57_points::open_reader(&out).unwrap().pointclouds();
+        assert_eq!(
+            scans.iter().map(|s| s.records).collect::<Vec<_>>(),
+            [0, 2, 1]
+        );
+        assert!(scans[1].transform.is_none());
+        let reopened = open(&out, 100).unwrap();
+        assert_eq!(reopened.scan_poses.len(), 2);
+        assert_eq!(reopened.scan_poses[0].position, [120., 240., 360.]);
+        assert_eq!(reopened.scan_poses[1].position, [180., 300., 420.]);
+        for (point, original) in reopened.points.iter().zip(&cloud.points[3..]) {
+            assert_eq!(
+                point.xyz,
+                std::array::from_fn(|axis| 2. * original.xyz[axis] + offset[axis])
+            );
+            assert_eq!(point.rgb, Some([12, 34, 56]));
+            assert_eq!(point.intensity, original.intensity);
+        }
+        let saved = fs::read(&out).unwrap();
+        assert!(export_e57_map_with_images(&cloud, &out, Some(4), 2., offset, map).is_err());
+        assert_eq!(fs::read(&out).unwrap(), saved);
+    }
+
+    #[test]
     fn parallel_point_export_keeps_order_and_exact_count_across_batches() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("ordered.xyz");
@@ -2150,6 +2274,33 @@ mod tests {
             })
             .unwrap();
             assert_eq!(count, 65_541);
+        }
+    }
+
+    #[test]
+    fn classified_csv_uses_the_full_stream_to_choose_las_format() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("classified.csv");
+        for (classes, extended) in [([1, 31, 2], false), ([32, 255, 1], true)] {
+            let mut csv = String::from("x,y,z,classification\n");
+            for (i, class) in classes.iter().enumerate() {
+                csv.push_str(&format!("{i},0,1,{class}\n"));
+            }
+            fs::write(&source, csv).unwrap();
+            let cloud = open(&source, 1).unwrap();
+            assert_eq!(preview_extended_las_format(&cloud), None);
+            for format in [ExportFormat::Las, ExportFormat::Laz] {
+                let output = directory.path().join(format!("out.{}", format.extension()));
+                export_full(&cloud, &output, format).unwrap();
+                let mut reader = las::Reader::from_path(output).unwrap();
+                assert_eq!(reader.header().point_format().is_extended, extended);
+                assert!(u64::from(reader.header().point_format().len()) <= las_point_bytes(&cloud));
+                let actual: Vec<u8> = reader
+                    .points()
+                    .map(|p| u8::from(p.unwrap().classification))
+                    .collect();
+                assert_eq!(actual, classes);
+            }
         }
     }
 
@@ -2713,6 +2864,14 @@ mod tests {
             };
             let mut bytes = Vec::new();
             exported_images.blob(blob, &mut bytes).unwrap();
+            let mut pages = crate::e57_quick::Source::open(&destination, 1024).unwrap();
+            let mut header = Vec::new();
+            let logical = crate::e57_quick::logical_offset(blob.offset, 1024);
+            pages.read(logical, 16, &mut header).unwrap();
+            assert_eq!(
+                header[8..],
+                (16 + blob.length).next_multiple_of(4).to_le_bytes()
+            );
             assert_eq!(bytes, image_bytes);
         }
         assert_eq!(reopened.scan_poses.len(), 2);
@@ -3135,6 +3294,111 @@ mod tests {
     }
 
     #[test]
+    fn overlap_is_a_class_in_legacy_las_and_an_independent_flag_in_extended_las() {
+        let dir = tempfile::tempdir().unwrap();
+        for (format, source_class, expected_class) in [(3, 1, 12), (7, 2, 2)] {
+            let path = dir.path().join(format!("source-{format}.laz"));
+            let mut builder = las::Builder::from((1, 4));
+            builder.point_format = las::point::Format::new(format).unwrap();
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            writer
+                .write_point(las::Point {
+                    classification: las::point::Classification::new(source_class).unwrap(),
+                    is_overlap: true,
+                    gps_time: Some(0.),
+                    color: Some(las::Color::default()),
+                    ..Default::default()
+                })
+                .unwrap();
+            writer.close().unwrap();
+
+            let preview = crate::open_las_preview(&path, 1).unwrap();
+            assert_eq!(preview.points[0].classification, Some(expected_class));
+            let cloud = open(&path, 1).unwrap();
+            assert_eq!(cloud.points[0].classification, Some(expected_class));
+            let scene = dir.path().join(format!("scene-{format}.laz"));
+            crate::scene_export::write_las_scene(
+                &[crate::scene_export::SceneSource {
+                    cloud: &cloud,
+                    transform: Default::default(),
+                }],
+                &scene,
+                true,
+                &mut |_, _, _| true,
+                &mut |_, _| Ok(()),
+            )
+            .unwrap();
+            let normalized = las::Reader::from_path(scene)
+                .unwrap()
+                .read_point()
+                .unwrap()
+                .unwrap();
+            assert_eq!(u8::from(normalized.classification), source_class);
+            assert!(normalized.is_overlap);
+
+            let dest = dir.path().join(format!("edited-{format}.las"));
+            export_map(&cloud, &dest, ExportFormat::Las, 1, |_, mut point| {
+                assert_eq!(point.classification, Some(expected_class));
+                point.classification = Some(6);
+                Some(point)
+            })
+            .unwrap();
+            let edited = las::Reader::from_path(dest)
+                .unwrap()
+                .read_point()
+                .unwrap()
+                .unwrap();
+            assert_eq!(u8::from(edited.classification), 6);
+            assert_eq!(edited.is_overlap, format == 7);
+        }
+    }
+
+    #[test]
+    fn merge_rejects_mixed_gps_times_before_normalising_different_point_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = |name: &str, format: u8, time_type, time| {
+            let path = dir.path().join(name);
+            let mut builder = las::Builder::from((1, 2));
+            builder.point_format = las::point::Format::new(format).unwrap();
+            builder.gps_time_type = time_type;
+            let mut writer = las::Writer::from_path(&path, builder.into_header().unwrap()).unwrap();
+            writer
+                .write_point(las::Point {
+                    gps_time: time,
+                    ..Default::default()
+                })
+                .unwrap();
+            writer.close().unwrap();
+            crate::open_las_header(path).unwrap()
+        };
+        let no_time = source("no-time.las", 0, las::GpsTimeType::Week, None);
+        let week = source("week.las", 1, las::GpsTimeType::Week, Some(304530.125));
+        let adjusted = source(
+            "adjusted.laz",
+            1,
+            las::GpsTimeType::Standard,
+            Some(474530000.125),
+        );
+        let dest = dir.path().join("merged.las");
+        std::fs::write(&dest, b"previous output").unwrap();
+        for sources in [vec![&week, &adjusted], vec![&no_time, &adjusted, &week]] {
+            let err = merge_las_map_count(
+                &sources,
+                &dest,
+                ExportFormat::Las,
+                None,
+                &mut |_, _, point| Some(point),
+                &mut |_, _, _| Ok(()),
+            )
+            .unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("mixes GPS week time and adjusted standard GPS time"));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"previous output");
+        }
+    }
+
+    #[test]
     fn merged_laz_keeps_attributes_edits_and_atomic_output() {
         let dir = tempfile::tempdir().unwrap();
         let make_source = |name: &str, points: &[las::Point]| {
@@ -3335,6 +3599,52 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!destination.exists());
+    }
+
+    #[test]
+    fn rewriting_preserves_every_encoded_las_scan_angle() {
+        use las::raw::point::ScanAngle;
+        for scaled in i16::MIN..=i16::MAX {
+            let degrees = f32::from(ScanAngle::Scaled(scaled));
+            let written = ScanAngle::from(las_scan_angle_for_write(degrees));
+            assert_eq!(i16::from(written), scaled);
+        }
+        for rank in i8::MIN..=i8::MAX {
+            let degrees = f32::from(ScanAngle::Rank(rank));
+            let written = ScanAngle::from(las_scan_angle_for_write(degrees));
+            assert_eq!(i8::from(written), rank);
+        }
+    }
+
+    #[test]
+    fn full_las_laz_conversion_keeps_signed_scan_angles() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.las");
+        let mut builder = las::Builder::from((1, 4));
+        builder.point_format = las::point::Format::new(6).unwrap();
+        let mut writer = las::Writer::from_path(&source, builder.into_header().unwrap()).unwrap();
+        for sign in [1.0, -1.0] {
+            writer
+                .write_point(las::Point {
+                    x: sign,
+                    scan_angle: (sign * 12.097) as f32,
+                    gps_time: Some(0.0),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        writer.close().unwrap();
+        let mut input = source;
+        for format in [ExportFormat::Laz, ExportFormat::Las] {
+            let destination = dir.path().join(format!("converted.{}", format.extension()));
+            let cloud = crate::open_las_header(&input).unwrap();
+            export_full(&cloud, &destination, format).unwrap();
+            let mut reader = las::Reader::from_path(&destination).unwrap();
+            let angles: Vec<_> = reader.points().map(|p| p.unwrap().scan_angle).collect();
+            let expected = f32::from(las::raw::point::ScanAngle::Scaled(2016));
+            assert_eq!(angles, [expected, -expected]);
+            input = destination;
+        }
     }
 
     #[test]

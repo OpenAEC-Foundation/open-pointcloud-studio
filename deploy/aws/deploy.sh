@@ -21,7 +21,8 @@
 # (CAPABILITY_IAM). With --execute, OPENAEC_SMOKE_KEY is a key whose SHA-256
 # is in the secret: the smoke test (../cloud-api/smoke.sh, with its load
 # step) runs against the load balancer of the stack under HOST_NAME, also
-# before the DNS record of HOST_NAME points there.
+# before the DNS record of HOST_NAME points there. An explicit DesiredCount=0
+# needs no smoke key because the stopped service has no HTTP endpoint to test.
 #
 # Without --execute the account gets a change set and nothing else; the
 # script prints how to execute or delete it. No workflow calls this script.
@@ -53,10 +54,14 @@ extra=("${arguments[@]:5}")
 
 [[ -n "${AWS_REGION:-}" ]] || fail "set AWS_REGION to the region of the stack"
 [[ "$image" == *@sha256:* ]] || fail "IMAGE_URI has to name the image by its digest (...@sha256:...), not '$image'"
+requested_count=
 for pair in ${extra[@]+"${extra[@]}"}; do
     [[ "$pair" == [A-Za-z]*=* ]] || fail "'$pair' is not a parameter NAME=VALUE"
+    if [[ $pair == DesiredCount=* ]]; then
+        requested_count=${pair#DesiredCount=}
+    fi
 done
-if $execute && [[ -z "${OPENAEC_SMOKE_KEY:-}" ]]; then
+if $execute && [[ ! $requested_count =~ ^0+$ && -z ${OPENAEC_SMOKE_KEY:-} ]]; then
     fail "--execute runs the smoke test afterwards: set OPENAEC_SMOKE_KEY to a key whose SHA-256 is in the secret"
 fi
 
@@ -102,7 +107,20 @@ if [[ -n "$change_set" ]]; then
         aws_ cloudformation wait stack-update-complete --stack-name "$stack"
     fi
 else
-    echo "The stack is up to date; only the smoke test runs."
+    echo "The stack is up to date."
+fi
+
+# Without an override, an existing stack retains its earlier DesiredCount.
+# Read the applied value after the waiter, also on the no-change path.
+desired_count=$(aws_ cloudformation describe-stacks --stack-name "$stack" \
+    --query "Stacks[0].Parameters[?ParameterKey=='DesiredCount'].ParameterValue" --output text)
+[[ $desired_count =~ ^[0-9]+$ ]] || fail "cannot read DesiredCount for $stack"
+if [[ $requested_count =~ ^[0-9]+$ ]] && (( 10#$requested_count != 10#$desired_count )); then
+    fail "requested $requested_count tasks, but the stack reports DesiredCount=$desired_count"
+fi
+if [[ $desired_count =~ ^0+$ ]]; then
+    echo "DesiredCount=$desired_count. Skipping the HTTP smoke test for the stopped service."
+    exit 0
 fi
 
 output_of() {

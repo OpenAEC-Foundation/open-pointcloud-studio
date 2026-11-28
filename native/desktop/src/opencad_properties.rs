@@ -3,7 +3,7 @@
 // Changes: read-only point-cloud fields, a row that holds a control and the
 // iced 0.13 palette API.
 
-use iced::widget::{container, row, text};
+use iced::widget::{column, container, row, text};
 use iced::{Border, Element, Length};
 
 use crate::ui_style;
@@ -37,6 +37,40 @@ pub fn bounds_row(axis: &'static str, min: f64, max: f64) -> Element<'static, Me
     ]
     .align_y(iced::Alignment::Center);
     openaec_ui::widgets::property_grid_control_with(axis, values.into(), ui_theme::shared_theme)
+}
+
+/// Show a scale and a displacement per axis without rounding sub-millimetre edits.
+pub fn coordinate_rows(
+    title: &'static str,
+    displacement_label: &'static str,
+    scale: [f64; 3],
+    displacement: [f64; 3],
+) -> Element<'static, Message> {
+    let line = |axis: String, scale: String, offset: String| {
+        row![
+            text(axis).size(12).width(Length::Fixed(28.0)),
+            text(scale).size(12).width(Length::FillPortion(2)),
+            text(offset).size(12).width(Length::FillPortion(3)),
+        ]
+        .spacing(4)
+        .padding([3, 8])
+    };
+    let mut grid_rows = column![
+        section_header(title),
+        line(
+            crate::i18n::tr("Axis").into(),
+            crate::i18n::tr("Scale factor").into(),
+            crate::i18n::tr(displacement_label).into(),
+        )
+    ];
+    for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+        grid_rows = grid_rows.push(line(
+            axis.into(),
+            scale[i].to_string(),
+            displacement[i].to_string(),
+        ));
+    }
+    grid_rows.into()
 }
 
 /// Editable property field in the shared grid.
