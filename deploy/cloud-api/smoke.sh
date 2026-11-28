@@ -200,12 +200,13 @@ report "$(verdict pcd_ok)" "inspect of a binary_compressed PCD: $(query inspect-
 # 8. A plan drawing of the room.
 call drawing POST /v1/tools/section_drawing "$files/drawing.json" "${auth[@]}"
 drawing_ok() {
-    [[ "$status" == 200 && "$(query drawing 'd["report"]["drawn_points"] > 0')" == true ]] \
-        && file_of drawing "$work/room.dxf" \
-        && grep -q '^SECTION' <(tr -d '\r ' < "$work/room.dxf") \
-        && grep -q '^ENTITIES' <(tr -d '\r ' < "$work/room.dxf")
+    local name=$1
+    [[ "$status" == 200 && "$(query "$name" 'd["report"]["drawn_points"] > 0')" == true ]] \
+        && file_of "$name" "$work/$name.dxf" \
+        && grep -q '^SECTION' <(tr -d '\r ' < "$work/$name.dxf") \
+        && grep -q '^ENTITIES' <(tr -d '\r ' < "$work/$name.dxf")
 }
-report "$(verdict drawing_ok)" "section_drawing plan of room.xyz: DXF with SECTION and ENTITIES, $(query drawing 'd["report"]["drawn_points"]') points drawn (status $status)"
+report "$(verdict drawing_ok drawing)" "section_drawing plan of room.xyz: DXF with SECTION and ENTITIES, $(query drawing 'd["report"]["drawn_points"]') points drawn (status $status)"
 
 # 9. Meshes.
 for mesh in terrain surface; do
@@ -258,15 +259,17 @@ report "$(verdict expect_error mcp-get 405 METHODE_NIET_TOEGESTAAN)" "GET /mcp: 
 
 # The load step: two drawings of the largest file at once, then health.
 if $load; then
-    call load-1 POST /v1/tools/section_drawing "$files/load.json" "${auth[@]}" &
-    first=$!
-    call load-2 POST /v1/tools/section_drawing "$files/load.json" "${auth[@]}"
-    wait "$first"
-    load_ok() {
-        [[ "$(query load-1 'd["report"]["drawn_points"] > 0')" == true ]] \
-            && [[ "$(query load-2 'd["report"]["drawn_points"] > 0')" == true ]]
+    load_drawing() {
+        local name=$1
+        call "$name" POST /v1/tools/section_drawing "$files/load.json" "${auth[@]}"
+        drawing_ok "$name"
     }
-    report "$(verdict load_ok)" "two section drawings of hall.xyz at once: both drawn"
+    load_drawing load-1 &
+    first=$!
+    load_result=ok
+    load_drawing load-2 || load_result=wrong
+    wait "$first" || load_result=wrong
+    report "$load_result" "two section drawings of hall.xyz at once: both returned a verified DXF"
     call load-health GET /v1/health
     report "$(verdict test "$status" = 200)" "GET /v1/health after the load: 200 (status $status)"
 fi

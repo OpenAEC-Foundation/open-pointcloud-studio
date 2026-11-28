@@ -149,6 +149,16 @@ open-pointcloud-studio-api --version | -V
 open-pointcloud-studio-api --help | -h
 ```
 
+### Testing a running service
+
+From the repository root, run the smoke test against the service with a configured client key. Set `API_KEY` to that key. Use the version reported by the build and the body limit configured for the service.
+
+```bash
+bash deploy/cloud-api/smoke.sh http://127.0.0.1:8080 "$API_KEY" --version 2026.48.0 --limit-mib 8 --load
+```
+
+The test checks the five REST tools, bearer authentication, error responses and MCP discovery. With `--load`, it requests two section drawings concurrently, verifies both DXF files and checks service health afterwards.
+
 ## Examples
 
 Build the request with `jq`, send it with `curl`, and take the file out of the answer:

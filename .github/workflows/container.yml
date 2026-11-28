@@ -135,7 +135,7 @@ jobs:
       - name: Smoke-test the container
         env:
           NUMBER: ${{ steps.version.outputs.number }}
-        run: bash deploy/cloud-api/smoke.sh http://127.0.0.1:8080 "$API_KEY" --version "$NUMBER" --limit-mib "$LIMIT_MIB"
+        run: bash deploy/cloud-api/smoke.sh http://127.0.0.1:8080 "$API_KEY" --version "$NUMBER" --limit-mib "$LIMIT_MIB" --load
       - name: Install the MCP client
         run: |
           python3 -m venv "$RUNNER_TEMP/mcp"
