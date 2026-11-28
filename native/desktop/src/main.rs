@@ -2373,6 +2373,7 @@ struct Studio {
     /// The program that opens exported DXF and DWG files.
     cad_viewer: cad_viewer::CadViewer,
     settings_revision: u64,
+    settings_dirty: bool,
     box_select: bool,
     pick_mode: bool,
     pan_tool: bool,
@@ -3139,6 +3140,7 @@ impl Default for Studio {
                 settings.open_after_export,
             ),
             settings_revision: 0,
+            settings_dirty: false,
             box_select: false,
             pick_mode: false,
             pan_tool: false,
@@ -4108,6 +4110,7 @@ impl Studio {
     }
 
     fn queue_preferences_save(&mut self) -> Task<Message> {
+        self.settings_dirty = true;
         self.settings_revision = self.settings_revision.wrapping_add(1);
         let revision = self.settings_revision;
         Task::perform(
@@ -4117,6 +4120,14 @@ impl Studio {
             },
             Message::PersistSettings,
         )
+    }
+
+    fn flush_pending_preferences(&mut self) -> std::io::Result<()> {
+        if self.settings_dirty {
+            preferences::save(&self.preferences())?;
+            self.settings_dirty = false;
+        }
+        Ok(())
     }
 
     fn surface_mesh_config(&self) -> Result<SurfaceMeshConfig, String> {
@@ -6846,6 +6857,9 @@ impl Studio {
                 // A change of the Pointcloud to Drawing project that waits for its
                 // moment is written before the window goes.
                 self.flush_mesh_to_plans();
+                if let Err(error) = self.flush_pending_preferences() {
+                    eprintln!("Could not save settings before exit: {error}");
+                }
                 self.stop_background_work();
                 return iced::exit();
             }
@@ -6913,7 +6927,7 @@ impl Studio {
             }
             Message::PersistSettings(revision) => {
                 if revision == self.settings_revision {
-                    if let Err(error) = preferences::save(&self.preferences()) {
+                    if let Err(error) = self.flush_pending_preferences() {
                         self.status = format!("Could not save settings: {error}");
                     }
                 }

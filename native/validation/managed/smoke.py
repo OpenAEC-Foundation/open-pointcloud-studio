@@ -200,10 +200,15 @@ with tempfile.TemporaryDirectory(prefix="ops-managed-") as directory:
                 assert source.read_bytes() == source_bytes
                 tool("screenshot", path=str((args.output / "managed-window.png").resolve()), window=True)
                 assert (args.output / "managed-window.png").stat().st_size > 1000
+                # Exit while the usual 350 ms preference save is still queued.
+                tool("set_budget", points=2_700_000)
             assert request("DELETE", "/mcp")[0] == 200
             assert request("POST", "/mcp", {"jsonrpc": "2.0", "id": 999, "method": "ping"})[0] == 404
             window.send_signal(signal.SIGTERM)
             assert window.wait(timeout=30) == 0
+            if not args.paused_access:
+                settings = directory / "config/open-pointcloud-studio-native/settings.json"
+                assert json.loads(settings.read_bytes())["budget"] == 2_700_000
             assert request("GET", "/gezond")[0] == 503
             report = {"ok": True, "server": initialized["serverInfo"], "tool_count": len(definitions),
                       "open_save_points": open_save_points, "staged_version_points": staged_points,
