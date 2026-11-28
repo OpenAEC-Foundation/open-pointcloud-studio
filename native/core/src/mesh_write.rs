@@ -161,7 +161,7 @@ pub fn write_mesh(
                     destination,
                     crate::DrawingFormat::Dwg,
                 )?,
-                _ => crate::cad3d::ifc::write_model_ifc(&model, destination)?,
+                _ => crate::cad3d::ifc::write_model_ifc(&model, destination, None)?,
             };
             Ok(MeshWriteReport::default())
         }

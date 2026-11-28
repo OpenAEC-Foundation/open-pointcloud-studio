@@ -432,6 +432,9 @@ destination in a folder that exists, and its extension chooses the format:
   solids (`3DSOLID`) are written: a CAD program can turn the meshes into
   surfaces or solids where it offers that.
 - `.ifc`: IFC4 as a STEP file, with a project, site, building and storey.
+  The project references the anchor scan via `IfcRelAssociatesDocument`.
+  Its `IfcDocumentReference.Location` is a relative URI for the original
+  filename. Place the scan next to the IFC when distributing them together.
   Every face is an `IfcBuildingElementProxy` with object type
   `Plane (wall)` and so on, or `Cylinder`, as the class is a direction and
   not a building element. A flat face is an `IfcPolygonalFaceSet` with a
