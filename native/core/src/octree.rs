@@ -1640,8 +1640,17 @@ fn cache_fingerprint_for(
         .modified
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos());
+    // Older CSV caches omitted classification or interpreted it as another attribute.
+    let version = if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    {
+        "octree-v2-csv-classification"
+    } else {
+        "octree-v2"
+    };
     let mut fingerprint = format!(
-        "octree-v2\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
+        "{version}\n{:?}\n{}\n{:?}\n{}\n{}\n{}\n",
         path, stamp.length, modified, config.leaf_points, config.preview_points, config.max_depth
     )
     .into_bytes();
