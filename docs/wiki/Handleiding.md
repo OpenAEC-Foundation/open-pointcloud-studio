@@ -26,6 +26,29 @@ De knop **Weergave** onder de **kijkkubus**, rechtsboven in de 3D-weergave, open
 
 Klik links in de projectbrowser op een scan om die actief te maken; de eigenschappen van die scan verschijnen rechts. Voor scans vanaf één miljoen punten maakt de app een herbruikbare octree-index op schijf. De 3D-weergave leest vervolgens detail voor de huidige camera, tot het aantal **Punten in beeld**. Dat maakt ook scans van vele gigabytes hanteerbaar, afhankelijk van opslag, RAM en GPU. Een ongewijzigd bestand gebruikt bij een volgende opening de bestaande index.
 
+### Een uitsnede van een online COPC-scan openen
+
+Met PDAL kun je een rechthoek op volle puntdichtheid ophalen uit een online COPC-scan. De server moet HTTP-bytebereiken ondersteunen. PDAL schrijft de punten naar een lokaal LAZ-bestand dat je in Studio kunt openen. [PDAL COPC-lezer](https://pdal.io/en/stable/stages/readers.copc.html)
+
+```sh
+pdal translate https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz autzen-window.laz --reader=readers.copc --readers.copc.bounds="([637200,637300],[851150,851250])" --writers.las.forward=all --writers.las.extra_dims=all
+open-pointcloud-studio autzen-window.laz
+```
+
+Dit voorbeeld haalt 5.197 punten op uit een vlak van 100 × 100 voet in de openbare Autzen-scan in Oregon. Vul voor een eigen scan de URL en de grenzen in het coördinatenstelsel van de bron in. Het eerste paar bevat de kleinste en grootste X, het tweede de kleinste en grootste Y. Alle hoogtes tellen mee.
+
+### Een Studio-export delen als COPC
+
+Exporteer je selectie uit Studio als LAS of LAZ. Met PDAL maak je er een COPC-bestand van voor viewers die via HTTP delen van een scan ophalen. Vervang `survey.laz` in het voorbeeld door je eigen exportbestand. [COPC schrijven met PDAL](https://pdal.io/en/stable/stages/writers.copc.html)
+
+```sh
+pdal translate survey.laz survey.copc.laz --writer=writers.copc --writers.copc.forward=all --writers.copc.extra_dims=all
+pdal info --stats --dimensions=X,Y,Z survey.laz
+pdal info --driver readers.copc --stats --dimensions=X,Y,Z survey.copc.laz
+```
+
+Vergelijk voor elke as het aantal punten, het minimum en het maximum in beide rapporten. Bewaar de oorspronkelijke export als je de originele veldtypen nodig hebt. Zo schreef PDAL 2.10.2 de geschaalde 16-bits AHN6-velden `Amplitude` en `Reflectance` als 64-bits kommagetallen. Alle meetwaarden kwamen in de geteste export overeen. Zet het COPC-bestand voor online gebruik op een server die HTTP-bytebereiken ondersteunt.
+
 ## 3. Punten selecteren en meten
 
 Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De groep SELECTIE heeft **Selecteer** (punt kiezen), **Vak selecteren**, **Selectie wissen**, **Geselecteerde punten verwijderen** en **Selectie exporteren**. **Rechtsklik** in de 3D-weergave opent het contextmenu. **Escape** verlaat het actieve gereedschap en heft ook de selectie op. **Delete** verbergt geselecteerde punten; **Ctrl+Z** en **Ctrl+Y** maken de laatste verwijdering of fotokleuring ongedaan of herhalen die.
