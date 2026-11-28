@@ -1645,6 +1645,13 @@ fn cache_fingerprint_for(
         path, stamp.length, modified, config.leaf_points, config.preview_points, config.max_depth
     )
     .into_bytes();
+    // Older CSV caches omitted the class or interpreted it as another attribute.
+    if source
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    {
+        fingerprint.extend_from_slice(b"csv-classification-v1\n");
+    }
     // Only affected E57 files need new normalised preview/index records.
     // Preserve existing keys for other sources, including huge plain-float E57s.
     if super::is_e57(source) && e57_points::open_reader(source)?.repaired_limits {

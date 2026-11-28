@@ -1001,7 +1001,7 @@ fn visit_points_with_poses(
         "pcd" => pcd::read(path, push, scan_begin),
         "dxf" => dxf::read(path, push),
         "e57" => e57_points::read(path, push, scan_begin),
-        "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, extension == "pts"),
+        "xyz" | "asc" | "txt" | "csv" | "pts" => read_text(path, push, &extension),
         _ => Err(LoadError::UnsupportedFormat(extension)),
     }
 }
@@ -1147,8 +1147,9 @@ fn convert_las_point(point: &las::Point) -> Point {
 fn read_text(
     path: &Path,
     push: &mut impl FnMut(Point) -> Result<(), LoadError>,
-    pts: bool,
+    extension: &str,
 ) -> Result<(), LoadError> {
+    let mut class_column = None;
     let reader = BufReader::new(File::open(path)?);
     let mut first_content_line = true;
     let mut seen_points = false;
@@ -1158,12 +1159,12 @@ fn read_text(
         if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
             continue;
         }
-        if pts && first_content_line && line.parse::<u64>().is_ok() {
+        if extension == "pts" && first_content_line && line.parse::<u64>().is_ok() {
             first_content_line = false;
             continue;
         }
         first_content_line = false;
-        let fields: Vec<&str> = line
+        let mut fields: Vec<&str> = line
             .split(|character: char| {
                 character.is_ascii_whitespace() || character == ',' || character == ';'
             })
@@ -1180,12 +1181,38 @@ fn read_text(
         let Some(coordinates) = coordinates else {
             // Allow a single header row such as x,y,z,r,g,b.
             if !seen_points && fields[0].eq_ignore_ascii_case("x") {
+                if extension == "csv" {
+                    class_column = fields
+                        .iter()
+                        .enumerate()
+                        .skip(3)
+                        .find(|(_, field)| field.eq_ignore_ascii_case("classification"))
+                        .map(|(index, _)| (index, fields.len()));
+                }
                 continue;
             }
             return Err(LoadError::InvalidData(format!(
                 "invalid coordinate on line {}",
                 line_number + 1
             )));
+        };
+        // Classification is a named CSV attribute, outside the positional
+        // XYZ/intensity/RGB layouts used by the other text formats.
+        let classification = if let Some((index, width)) = class_column {
+            if fields.len() != width {
+                return Err(LoadError::InvalidData(format!(
+                    "expected {width} CSV fields on line {}",
+                    line_number + 1
+                )));
+            }
+            Some(fields.remove(index).parse::<u8>().map_err(|_| {
+                LoadError::InvalidData(format!(
+                    "invalid classification on line {}",
+                    line_number + 1
+                ))
+            })?)
+        } else {
+            None
         };
         let has_intensity = fields.len() == 4 || fields.len() >= 7;
         let intensity = if has_intensity {
@@ -1220,7 +1247,7 @@ fn read_text(
             xyz: [coordinates[0], coordinates[1], coordinates[2]],
             rgb,
             intensity,
-            classification: None,
+            classification,
         })?;
         seen_points = true;
     }
@@ -1710,6 +1737,42 @@ mod tests {
         assert_eq!(cloud.bounds.min, [1.0, 2.0, 3.0]);
         assert_eq!(cloud.bounds.max, [4.0, 5.0, 6.0]);
         assert!(cloud.has_rgb);
+    }
+
+    #[test]
+    fn classified_csv_keeps_intensity_and_rgb_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("points.CSV");
+        for (header, row, class, intensity, rgb) in [
+            ("classification", "0", 0, None, None),
+            ("intensity,classification", "0.5,12", 12, Some(32768), None),
+            ("Classification,intensity", "5,0.5", 5, Some(32768), None),
+            (
+                "red,green,blue,classification",
+                "1,2,3,255",
+                255,
+                None,
+                Some([1, 2, 3]),
+            ),
+            (
+                "intensity,red,green,blue,classification",
+                "0.5,1,2,3,42",
+                42,
+                Some(32768),
+                Some([1, 2, 3]),
+            ),
+        ] {
+            std::fs::write(&file, format!("x,y,z,{header}\n1,2,3,{row}\n")).unwrap();
+            let cloud = open(&file, 10).unwrap();
+            let point = cloud.points[0];
+            assert_eq!(point.classification, Some(class));
+            assert_eq!(point.intensity, intensity);
+            assert_eq!(point.rgb, rgb);
+        }
+        for row in ["1,2,3", "1,2,3,256", "1,2,3,-1"] {
+            std::fs::write(&file, format!("x,y,z,classification\n{row}\n")).unwrap();
+            assert!(open(&file, 10).unwrap_err().to_string().contains("line 2"));
+        }
     }
 
     #[test]
