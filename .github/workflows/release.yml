@@ -708,12 +708,15 @@ jobs:
   # The latest.json the OpenAEC Installer reads, made with the release kit of
   # the installer once the release is public (OpenAEC-Foundation/OpenAEC-Blueprint#33).
   # It checks every .sig against UPDATER_PUBKEY and the tag against the
-  # version in native/Cargo.toml, and is attached last: until then no
+  # version in native/Cargo.toml. It is attached after the successful
+  # verification record for the published downloads. Until then no
   # installer offers the update. A release published by this workflow starts
   # no other workflow, so this is a job here and not a workflow of its own.
   updater-manifest:
-    needs: [prepare, publish]
-    if: ${{ !cancelled() && !inputs.draft_only && needs.publish.result == 'success' && needs.publish.outputs.updater_signed == 'true' }}
+    needs: [prepare, publish, verification-record]
+    if: >-
+      ${{ !cancelled() && !inputs.draft_only && needs.publish.result == 'success'
+          && needs.verification-record.result == 'success' && needs.publish.outputs.updater_signed == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -743,5 +746,8 @@ jobs:
             --pubkey "${{ vars.UPDATER_PUBKEY }}" --version-file native/Cargo.toml \
             --notes "See https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
             --out latest.json
-      - name: Attach latest.json last
-        run: gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Attach latest.json and verify the published manifest
+        run: |
+          gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output "$RUNNER_TEMP/published-latest.json" --clobber
+          cmp latest.json "$RUNNER_TEMP/published-latest.json"
