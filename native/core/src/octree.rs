@@ -1205,11 +1205,11 @@ fn is_ptx(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("ptx"))
 }
 
-// Legacy PTX metadata can describe points placed by a non-finite or non-affine transform.
+// Legacy PTX metadata can describe points placed by an invalid registration matrix.
 // Re-read the source once before trusting its preview or attaching its index.
 fn cloud_metadata_version(path: &Path) -> u8 {
     if is_ptx(path) {
-        3
+        4
     } else {
         1
     }
@@ -3599,9 +3599,9 @@ mod tests {
         for path in &paths {
             let header: serde_json::Value =
                 serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            assert_eq!(header["version"], 3);
+            assert_eq!(header["version"], 4);
         }
-        for old_version in [1, 2] {
+        for old_version in [1, 2, 3] {
             for path in &paths {
                 let mut header: serde_json::Value =
                     serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
