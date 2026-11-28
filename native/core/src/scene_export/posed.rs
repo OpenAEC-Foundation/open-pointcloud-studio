@@ -83,21 +83,23 @@ pub(crate) fn write(
                 };
                 scans += 1;
                 let mut output = writer.add_pointcloud(&guid, prototype.clone())?;
-                let station = pose
-                    .as_ref()
-                    .map(|pose| {
-                        let axes = pose.axes.unwrap_or(SceneTransform::default().rotation);
-                        SceneTransform {
-                            rotation: std::array::from_fn(|i| std::array::from_fn(|j| axes[j][i])),
-                            translation: pose.position,
-                            scale: 1.,
-                        }
-                        .validate()
-                    })
-                    .transpose()?;
-                if let Some(station) = station {
-                    output.set_transform(Some(source.transform.pose(Some(station.pose(None)))));
-                }
+                let station = pose.as_ref().and_then(|pose| {
+                    let axes = pose.axes.unwrap_or(SceneTransform::default().rotation);
+                    let frame = SceneTransform {
+                        rotation: std::array::from_fn(|i| std::array::from_fn(|j| axes[j][i])),
+                        translation: pose.position,
+                        scale: 1.,
+                    }
+                    .validate()
+                    .ok()?;
+                    let stored = frame.pose(None);
+                    let q = &stored.rotation;
+                    // PTX axes can be rounded. Invert the orientation actually stored
+                    // in the E57, so the reader reconstructs the original world point.
+                    let axes = crate::quaternion_axes([q.w, q.x, q.y, q.z])?;
+                    output.set_transform(Some(source.transform.pose(Some(stored))));
+                    Some((pose.position, axes))
+                });
                 let filename = source
                     .cloud
                     .path
@@ -124,13 +126,10 @@ pub(crate) fn write(
                                     }
                                     // Derive local coordinates from the original world point.
                                     // The output pose carries the shared scene transform.
-                                    let xyz = if let Some(station) = station {
+                                    let xyz = if let Some((origin, axes)) = station {
                                         std::array::from_fn(|i| {
                                             (0..3)
-                                                .map(|j| {
-                                                    station.rotation[j][i]
-                                                        * (point.xyz[j] - station.translation[j])
-                                                })
+                                                .map(|j| axes[i][j] * (point.xyz[j] - origin[j]))
                                                 .sum::<f64>()
                                                 * source.transform.scale
                                         })
