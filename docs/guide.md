@@ -296,6 +296,8 @@ A turned box clips the points, the exports, the selections, the meshers and the 
 - **Zoom selection** in the NAVIGATION group, or **Show selection** under Display, frames the selected points without changing the section box.
 - **Export selection** writes the selected points; see [Exporting and merging](#exporting-and-merging).
 
+For LAS and LAZ files, **Properties → LAS coordinate grid** shows the scale and offset for each source axis in X, Y, Z order. The source coordinate equals the stored integer times its scale plus its offset. These header values stay the same when you move or scale the layer in the scene. **Live transform** shows each axis’s current scale factor and the displacement of the centre of the scan bounds, including shifts smaller than 1 mm. Exporting that layer to LAS or LAZ rounds the edited coordinates to the nearest grid step. For example, a 0.4 mm move along one axis disappears on a 1 mm grid. Binary PLY stores the edited XYZ coordinates as double-precision values. Keep the LAS/LAZ source if you need its survey fields and coordinate reference system.
+
 Selections honour the section box, the hidden classes and the points deleted before. For a very large selection the scene highlights a sample of the selected points; the count in Properties and in the status bar is the exact one.
 
 ### Editing

@@ -529,6 +529,8 @@ mod tests {
         ("property_input", 0),
         ("property_control", 0),
         ("section_header", 0),
+        ("coordinate_rows", 0),
+        ("coordinate_rows", 1),
         // mesh_wizard.rs
         ("option_input", 0),
         ("option_control", 0),
