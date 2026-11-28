@@ -443,6 +443,13 @@ impl Studio {
         .into()
     }
 
+    fn point_export_grid_note(&self) -> Option<Element<'static, Message>> {
+        if !matches!(self.export_format, ExportFormat::Las | ExportFormat::Laz) {
+            return None;
+        }
+        self.clouds.get(self.active?)?.las_rounding_note()
+    }
+
     /// Every export, grouped by what it writes. The format of a point cloud
     /// export and the step of Every Nth point are chosen here as well.
     fn export_page(&self) -> Element<'_, Message> {
@@ -478,10 +485,12 @@ impl Studio {
                 key("Save the active scan, a part of it, or what was made from it."),
             ),
             self.group_caption(key("POINT CLOUD")),
-            container(format).padding(iced::Padding {
-                bottom: 8.0,
-                ..iced::Padding::ZERO
-            }),
+            column![format]
+                .push_maybe(self.point_export_grid_note())
+                .padding(iced::Padding {
+                    bottom: 8.0,
+                    ..iced::Padding::ZERO
+                }),
             Self::tiles([
                 self.file_tile(
                     key("Full resolution…"),
@@ -675,7 +684,8 @@ impl Studio {
                     .spacing(12)
                     .align_y(iced::Alignment::Center),
                 ]
-                .spacing(10),
+                .spacing(10)
+                .push_maybe(self.point_export_grid_note()),
             )
             .width(Fill)
             .max_width(openaec_ui::widgets::BACKSTAGE_TILE_WIDTH),

@@ -224,6 +224,7 @@
   "Scale centroid": "Zwaartepunt voor schalen",
   "Cancel scale": "Schalen annuleren",
   "Live transform": "Actieve transformatie",
+  "LAS and LAZ round edited coordinates to the nearest step on the source grid.": "LAS en LAZ ronden bewerkte coördinaten af op de dichtstbijzijnde stap van het bronraster.",
   "LAS coordinate grid": "LAS-coördinatenraster",
   "Axis": "As",
   "Scale factor": "Schaalfactor",

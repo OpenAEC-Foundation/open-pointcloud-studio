@@ -2747,6 +2747,19 @@ struct EditBatch {
 }
 
 impl CloudEntry {
+    fn las_rounding_note(&self) -> Option<Element<'static, Message>> {
+        (self.las_grid.is_some() && !self.transform.is_identity()).then(|| {
+            container(
+                text(i18n::tr(
+                    "LAS and LAZ round edited coordinates to the nearest step on the source grid.",
+                ))
+                .size(12),
+            )
+            .padding([4, 8])
+            .into()
+        })
+    }
+
     /// Put another cloud of the same source in the layer. A selection or
     /// deletion made on a provisional cloud is sized for its stated count
     /// and does not carry over to a cloud with another count.
@@ -11957,7 +11970,9 @@ impl Studio {
                 ));
             }
             if let Some(grid) = entry.las_grid {
-                properties = properties.push(opencad_properties::las_coordinate_grid(grid));
+                properties = properties
+                    .push(opencad_properties::las_coordinate_grid(grid))
+                    .push_maybe(entry.las_rounding_note());
             }
             if !entry.transform.is_identity() {
                 let source_center = entry.cloud.bounds.center();
