@@ -968,6 +968,18 @@ Coordinates far from zero: on an axis where the faces or the mesh lie more than 
 
 The files were checked with the reader of the codec that writes the DXF and DWG files, and the IFC file with a check of its STEP structure and with an open-source IFC library; not yet with a range of CAD and BIM programs. If a program refuses a DWG file, try DXF.
 
+#### Deliver reviewed faces as IFC walls and slabs
+
+Open the exported IFC beside the scan and check which numbered faces represent building elements. From a Studio source checkout, use the [classification tool](../native/tools/classify-ifc-faces.py) with Python and IfcOpenShell. Run the tool with the exported IFC to list its planar face numbers, names and GlobalIds. Then pass the numbers you reviewed to `--wall` or `--slab`.
+
+```sh
+python -m pip install ifcopenshell
+python native/tools/classify-ifc-faces.py faces.ifc
+python native/tools/classify-ifc-faces.py faces.ifc --output reviewed.ifc --wall 4 5 --slab 2
+```
+
+The example assigns faces 4 and 5 to `IfcWall` and face 2 to `IfcSlab`. It writes a sibling IFC so the relative link to the scan still resolves. The selected elements keep their GlobalIds, measured surfaces and scan properties. A class assignment describes what the surface belongs to. Wall thickness and slab depth require separate measurements.
+
 #### The JSON file
 
 | Field | Meaning |
