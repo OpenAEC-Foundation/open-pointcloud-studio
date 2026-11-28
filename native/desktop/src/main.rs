@@ -11957,13 +11957,7 @@ impl Studio {
                 ));
             }
             if let Some(grid) = entry.las_grid {
-                properties =
-                    properties.push(opencad_properties::section_header("LAS coordinate grid"));
-                for (label, [x, y, z]) in [("Scale XYZ", grid.scale), ("Offset XYZ", grid.offset)] {
-                    let row = opencad_properties::property_row(label, format!("{x}, {y}, {z}"));
-                    properties =
-                        properties.push(ui_style::tooltip(row, format!("X  {x}\nY  {y}\nZ  {z}")));
-                }
+                properties = properties.push(opencad_properties::las_coordinate_grid(grid));
             }
             if !entry.transform.is_identity() {
                 let source_center = entry.cloud.bounds.center();
