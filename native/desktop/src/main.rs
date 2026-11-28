@@ -2486,6 +2486,7 @@ struct CloudEntry {
     /// Stable identity for asynchronous work started before a LAS preview
     /// replaces the initial header-only cloud.
     load_identity: Arc<PointCloud>,
+    las_grid: Option<pointcloud_core::LasCoordinateGrid>,
     /// Identifies a preview whose one-pass octree is still building.
     index_import_id: Option<u64>,
     transform: CloudTransform,
@@ -2834,6 +2835,19 @@ struct EditBatch {
 }
 
 impl CloudEntry {
+    fn las_rounding_note(&self) -> Option<Element<'static, Message>> {
+        (self.las_grid.is_some() && !self.transform.is_identity()).then(|| {
+            container(
+                text(i18n::tr(
+                    "LAS and LAZ round edited coordinates to the nearest step on the source grid.",
+                ))
+                .size(12),
+            )
+            .padding([4, 8])
+            .into()
+        })
+    }
+
     /// Put another cloud of the same source in the layer. A selection or
     /// deletion made on a provisional cloud is sized for its stated count
     /// and does not carry over to a cloud with another count.
@@ -3394,6 +3408,7 @@ impl Studio {
         self.clouds.push(CloudEntry {
             cloud: Arc::clone(&header),
             load_identity: Arc::clone(&header),
+            las_grid: None,
             index_import_id: None,
             transform: CloudTransform::default(),
             centroid_cache: None,
@@ -4177,6 +4192,7 @@ impl Studio {
                             "view_sample": entry.view_len(),
                             "focus_sample": entry.focus_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
+                            "las_grid": entry.las_grid,
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
                             "mesh": mesh_export::mesh_value(entry),
                             "faces": faces::layer_value(&self.clouds, index),
@@ -6081,8 +6097,8 @@ impl Studio {
                 extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
             });
         if is_las {
-            match pointcloud_core::open_las_header(&path) {
-                Ok(header_cloud) => {
+            match pointcloud_core::open_las_header_with_grid(&path) {
+                Ok((header_cloud, grid)) => {
                     self.status = format!(
                         "Opened {} points; building preview…",
                         header_cloud.total_points
@@ -6091,6 +6107,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         cloud: Arc::clone(&header_cloud),
                         load_identity: Arc::clone(&header_cloud),
+                        las_grid: Some(grid),
                         index_import_id: None,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
@@ -7314,6 +7331,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         bag_source: is_bag3d_mesh(&cloud.path),
                         load_identity: Arc::clone(&cloud),
+                        las_grid: None,
                         index_import_id: None,
                         cloud,
                         transform: CloudTransform::default(),
@@ -12078,28 +12096,23 @@ impl Studio {
                     entry.bounds().max[axis],
                 ));
             }
-            if !entry.transform.is_identity() {
-                let source_center = entry.cloud.bounds.center();
-                let edited_center = entry.bounds().center();
+            if let Some(grid) = entry.las_grid {
                 properties = properties
-                    .push(opencad_properties::section_header("Live transform"))
-                    .push(opencad_properties::property_row(
-                        "Scale XYZ",
-                        format!(
-                            "{:.3}, {:.3}, {:.3}",
-                            entry.transform.scale[0],
-                            entry.transform.scale[1],
-                            entry.transform.scale[2]
-                        ),
+                    .push(opencad_properties::coordinate_rows(
+                        "LAS coordinate grid",
+                        "Offset",
+                        grid.scale,
+                        grid.offset,
                     ))
-                    .push(opencad_properties::property_row(
+                    .push_maybe(entry.las_rounding_note());
+            }
+            if !entry.transform.is_identity() {
+                properties = properties
+                    .push(opencad_properties::coordinate_rows(
+                        "Live transform",
                         "Centre shift",
-                        format!(
-                            "{:.3}, {:.3}, {:.3}",
-                            edited_center[0] - source_center[0],
-                            edited_center[1] - source_center[1],
-                            edited_center[2] - source_center[2]
-                        ),
+                        entry.transform.scale,
+                        entry.transform.centre_shift(entry.cloud.bounds),
                     ))
                     .push(
                         container(

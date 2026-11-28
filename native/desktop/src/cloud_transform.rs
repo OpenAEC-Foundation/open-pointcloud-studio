@@ -26,6 +26,15 @@ impl CloudTransform {
         std::array::from_fn(|axis| source[axis] * self.scale[axis] + self.offset[axis])
     }
 
+    /// Displacement of the source bounding-box centre. Computing the difference
+    /// directly keeps a small translation independent of the survey origin.
+    pub fn centre_shift(self, source: Bounds) -> [f64; 3] {
+        std::array::from_fn(|axis| {
+            let centre = source.min[axis].midpoint(source.max[axis]);
+            (self.scale[axis] - 1.0).mul_add(centre, self.offset[axis])
+        })
+    }
+
     pub fn source_xyz(self, world: [f64; 3]) -> Option<[f64; 3]> {
         self.scale
             .iter()
@@ -146,6 +155,22 @@ mod tests {
         assert_eq!(scaled.xyz([10.0, 20.0, 30.0]), [30.0, 15.0, 30.0]);
         assert_eq!(scaled.bounds(source).min, [10.0, 15.0, 30.0]);
         assert_eq!(scaled.bounds(source).max, [30.0, 25.0, 50.0]);
+    }
+
+    #[test]
+    fn centre_shift_keeps_small_moves_at_survey_coordinates_and_accounts_for_scale() {
+        let source = Bounds {
+            min: [208400.0, 474950.0, -10.0],
+            max: [208500.0, 475050.0, 30.0],
+        };
+        let shift = [0.0004, -0.0004, 0.0006];
+        let moved = CloudTransform::default().translated(shift, source).unwrap();
+        assert_eq!(moved.centre_shift(source), shift);
+
+        let scaled = CloudTransform::default()
+            .scaled_about([-1.0, 0.5, 2.0], source.min, source)
+            .unwrap();
+        assert_eq!(scaled.centre_shift(source), [-100.0, -25.0, 20.0]);
     }
 
     #[test]
