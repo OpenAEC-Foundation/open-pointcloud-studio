@@ -48,12 +48,12 @@ fn produce(path: &Path, sender: SyncSender<Event>) -> Result<(), LoadError> {
     flush()
 }
 
-pub(super) fn write(
+pub(crate) fn write(
     writer: &mut E57Writer<File>,
     source: &SceneSource<'_>,
     prototype: Vec<Record>,
     first_guid: &str,
-    include: &mut impl FnMut(u64, &Point) -> bool,
+    map: &mut impl FnMut(u64, Point) -> Option<Point>,
     progress: &mut impl FnMut(u64) -> Result<(), LoadError>,
 ) -> Result<u64, LoadError> {
     std::thread::scope(|scope| {
@@ -83,21 +83,23 @@ pub(super) fn write(
                 };
                 scans += 1;
                 let mut output = writer.add_pointcloud(&guid, prototype.clone())?;
-                let station = pose
-                    .as_ref()
-                    .map(|pose| {
-                        let axes = pose.axes.unwrap_or(SceneTransform::default().rotation);
-                        SceneTransform {
-                            rotation: std::array::from_fn(|i| std::array::from_fn(|j| axes[j][i])),
-                            translation: pose.position,
-                            scale: 1.,
-                        }
-                        .validate()
-                    })
-                    .transpose()?;
-                if let Some(station) = station {
-                    output.set_transform(Some(source.transform.pose(Some(station.pose(None)))));
-                }
+                let station = pose.as_ref().and_then(|pose| {
+                    let axes = pose.axes.unwrap_or(SceneTransform::default().rotation);
+                    let frame = SceneTransform {
+                        rotation: std::array::from_fn(|i| std::array::from_fn(|j| axes[j][i])),
+                        translation: pose.position,
+                        scale: 1.,
+                    }
+                    .validate()
+                    .ok()?;
+                    let stored = frame.pose(None);
+                    let q = &stored.rotation;
+                    // PTX axes can be rounded. Invert the orientation actually stored
+                    // in the E57, so the reader reconstructs the original world point.
+                    let axes = crate::quaternion_axes([q.w, q.x, q.y, q.z])?;
+                    output.set_transform(Some(source.transform.pose(Some(stored))));
+                    Some((pose.position, axes))
+                });
                 let filename = source
                     .cloud
                     .path
@@ -116,21 +118,25 @@ pub(super) fn write(
                         }
                         Some(Event::Points(points)) => {
                             for point in points {
-                                if include(ordinal, &point) {
-                                    let xyz = if let Some(station) = station {
+                                if let Some(mapped) = map(ordinal, point) {
+                                    if !mapped.xyz.iter().all(|v| v.is_finite()) {
+                                        return Err(LoadError::InvalidData(
+                                            "transform produced non-finite coordinates".into(),
+                                        ));
+                                    }
+                                    // Derive local coordinates from the original world point.
+                                    // The output pose carries the shared scene transform.
+                                    let xyz = if let Some((origin, axes)) = station {
                                         std::array::from_fn(|i| {
                                             (0..3)
-                                                .map(|j| {
-                                                    station.rotation[j][i]
-                                                        * (point.xyz[j] - station.translation[j])
-                                                })
+                                                .map(|j| axes[i][j] * (point.xyz[j] - origin[j]))
                                                 .sum::<f64>()
                                                 * source.transform.scale
                                         })
                                     } else {
                                         source.transform.xyz(point.xyz)
                                     };
-                                    output.add_point(point_values(source.cloud, point, xyz))?;
+                                    output.add_point(point_values(source.cloud, mapped, xyz))?;
                                     written += 1;
                                 }
                                 ordinal += 1;
