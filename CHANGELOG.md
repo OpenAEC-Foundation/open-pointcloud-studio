@@ -17,6 +17,8 @@ section its version and date.
 
 ## Unreleased
 
+- Inspect the original LAS or LAZ coordinate scale and offset for each axis in Properties.
+
 ## 2026.48.0 - 2026-11-24
 
 - E57 exports keep the original sensor grid, physical intensity limits and station photographs when filtering or recolouring scans.

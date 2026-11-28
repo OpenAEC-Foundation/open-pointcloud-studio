@@ -2433,6 +2433,7 @@ struct CloudEntry {
     /// Stable identity for asynchronous work started before a LAS preview
     /// replaces the initial header-only cloud.
     load_identity: Arc<PointCloud>,
+    las_grid: Option<pointcloud_core::LasCoordinateGrid>,
     /// Identifies a preview whose one-pass octree is still building.
     index_import_id: Option<u64>,
     transform: CloudTransform,
@@ -3278,6 +3279,7 @@ impl Studio {
         self.clouds.push(CloudEntry {
             cloud: Arc::clone(&header),
             load_identity: Arc::clone(&header),
+            las_grid: None,
             index_import_id: None,
             transform: CloudTransform::default(),
             centroid_cache: None,
@@ -4051,6 +4053,7 @@ impl Studio {
                             "view_sample": entry.view_len(),
                             "focus_sample": entry.focus_len(),
                             "bounds": {"min": entry.bounds().min, "max": entry.bounds().max},
+                            "las_grid": entry.las_grid,
                             "transform": {"scale": entry.transform.scale, "offset": entry.transform.offset},
                             "mesh": mesh_export::mesh_value(entry),
                             "faces": faces::layer_value(&self.clouds, index),
@@ -5972,8 +5975,8 @@ impl Studio {
                 extension.eq_ignore_ascii_case("las") || extension.eq_ignore_ascii_case("laz")
             });
         if is_las {
-            match pointcloud_core::open_las_header(&path) {
-                Ok(header_cloud) => {
+            match pointcloud_core::open_las_header_with_grid(&path) {
+                Ok((header_cloud, grid)) => {
                     self.status = format!(
                         "Opened {} points; building preview…",
                         header_cloud.total_points
@@ -5982,6 +5985,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         cloud: Arc::clone(&header_cloud),
                         load_identity: Arc::clone(&header_cloud),
+                        las_grid: Some(grid),
                         index_import_id: None,
                         transform: CloudTransform::default(),
                         centroid_cache: None,
@@ -7201,6 +7205,7 @@ impl Studio {
                     self.clouds.push(CloudEntry {
                         bag_source: is_bag3d_mesh(&cloud.path),
                         load_identity: Arc::clone(&cloud),
+                        las_grid: None,
                         index_import_id: None,
                         cloud,
                         transform: CloudTransform::default(),
@@ -11950,6 +11955,15 @@ impl Studio {
                     entry.bounds().min[axis],
                     entry.bounds().max[axis],
                 ));
+            }
+            if let Some(grid) = entry.las_grid {
+                properties =
+                    properties.push(opencad_properties::section_header("LAS coordinate grid"));
+                for (label, [x, y, z]) in [("Scale XYZ", grid.scale), ("Offset XYZ", grid.offset)] {
+                    let row = opencad_properties::property_row(label, format!("{x}, {y}, {z}"));
+                    properties =
+                        properties.push(ui_style::tooltip(row, format!("X  {x}\nY  {y}\nZ  {z}")));
+                }
             }
             if !entry.transform.is_identity() {
                 let source_center = entry.cloud.bounds.center();

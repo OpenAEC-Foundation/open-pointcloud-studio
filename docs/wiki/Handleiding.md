@@ -26,6 +26,8 @@ De knop **Weergave** onder de **kijkkubus**, rechtsboven in de 3D-weergave, open
 
 Klik links in de projectbrowser op een scan om die actief te maken; de eigenschappen van die scan verschijnen rechts. Voor scans vanaf één miljoen punten maakt de app een herbruikbare octree-index op schijf. De 3D-weergave leest vervolgens detail voor de huidige camera, tot het aantal **Punten in beeld**. Dat maakt ook scans van vele gigabytes hanteerbaar, afhankelijk van opslag, RAM en GPU. Een ongewijzigd bestand gebruikt bij een volgende opening de bestaande index.
 
+Bij LAS en LAZ toont **Eigenschappen → LAS-coördinatenraster** de schaal en offset voor X, Y en Z uit het bronbestand. Houd de muis boven een rij om elke as apart te lezen. De broncoördinaat is de opgeslagen gehele waarde maal de schaal, plus de offset.
+
 ## 3. Punten selecteren en meten
 
 Klik op een punt om het te selecteren of sleep een rechthoek rond een gebied. De groep SELECTIE heeft **Selecteer** (punt kiezen), **Vak selecteren**, **Selectie wissen**, **Geselecteerde punten verwijderen** en **Selectie exporteren**. **Rechtsklik** in de 3D-weergave opent het contextmenu. **Escape** verlaat het actieve gereedschap en heft ook de selectie op. **Delete** verbergt geselecteerde punten; **Ctrl+Z** en **Ctrl+Y** maken de laatste verwijdering of fotokleuring ongedaan of herhalen die.

@@ -859,6 +859,20 @@ pub fn read_scan_images(
 /// Open LAS/LAZ metadata immediately, before the preview sampling pass finishes.
 /// The caller may replace this cloud with `open`'s fully checked result later.
 pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> {
+    open_las_header_with_grid(path).map(|(cloud, _)| cloud)
+}
+
+/// The per-axis coefficients that map a stored LAS integer to a source coordinate.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct LasCoordinateGrid {
+    pub scale: [f64; 3],
+    pub offset: [f64; 3],
+}
+
+/// Read the header-only cloud and its coordinate grid from the same LAS/LAZ header.
+pub fn open_las_header_with_grid(
+    path: impl AsRef<Path>,
+) -> Result<(PointCloud, LasCoordinateGrid), LoadError> {
     let path = path.as_ref();
     let extension = path
         .extension()
@@ -886,7 +900,13 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
     {
         return Err(LoadError::InvalidData("empty or invalid LAS header".into()));
     }
-    Ok(PointCloud {
+    let transforms = header.transforms();
+    let axes = [transforms.x, transforms.y, transforms.z];
+    let grid = LasCoordinateGrid {
+        scale: axes.map(|axis| axis.scale),
+        offset: axes.map(|axis| axis.offset),
+    };
+    let cloud = PointCloud {
         path: path.to_path_buf(),
         total_points: count,
         bounds,
@@ -901,7 +921,8 @@ pub fn open_las_header(path: impl AsRef<Path>) -> Result<PointCloud, LoadError> 
         provisional: false,
         source_stamp: Some(stamp),
         scan_ranges_known: true,
-    })
+    };
+    Ok((cloud, grid))
 }
 
 /// Sample LAS/LAZ in bounded, evenly spaced source ranges. Header bounds and
@@ -1732,6 +1753,18 @@ mod tests {
             ));
             let mut builder = las::Builder::from((1, 2));
             builder.point_format = las::point::Format::new(2).unwrap();
+            builder.transforms.x = las::Transform {
+                scale: 0.125,
+                offset: 10.5,
+            };
+            builder.transforms.y = las::Transform {
+                scale: 0.0625,
+                offset: -1.25,
+            };
+            builder.transforms.z = las::Transform {
+                scale: 0.015625,
+                offset: 48.5,
+            };
             let header = builder.into_header().unwrap();
             let mut writer = las::Writer::from_path(&path, header).unwrap();
             writer
@@ -1751,7 +1784,9 @@ mod tests {
                 .unwrap();
             drop(writer);
 
-            let quick = open_las_header(&path).unwrap();
+            let (quick, grid) = open_las_header_with_grid(&path).unwrap();
+            assert_eq!(grid.scale, [0.125, 0.0625, 0.015625]);
+            assert_eq!(grid.offset, [10.5, -1.25, 48.5]);
             assert_eq!(quick.total_points, 1);
             assert_eq!(quick.bounds.min, [12.0, 34.0, 56.0]);
             assert!(quick.points.is_empty());

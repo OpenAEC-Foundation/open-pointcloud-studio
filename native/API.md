@@ -1497,6 +1497,8 @@ the removed points without changing the source file. Photo colours given or
 removed are an edit as well: `undo_delete` takes back the latest edit of
 either kind, at most eight, and `redo_delete` does it again.
 
+For a LAS or LAZ layer, `status.result.clouds[].las_grid` contains the source header’s `scale` and `offset` arrays in X, Y, Z order. Each source coordinate equals the stored integer multiplied by its scale plus its offset. Other layers return `null`. The layer’s live edits are reported separately in `transform`.
+
 ## Changes and undo
 
 `undo_delete` takes back the latest edit and `redo_delete` does it again.
@@ -1978,6 +1980,7 @@ commands of the releases from 0.4.0 to 0.9.5, were not.
 
 | Revision | Release | Changes |
 | --- | --- | --- |
+| 19 | Unreleased | Each layer in `status` reports `las_grid` with the LAS/LAZ header scales and offsets, or `null` for other formats. |
 | 18 | Unreleased | `texture_mesh` resamples source-cloud colours with bounded distance/normal/outlier filtering and reports measured versus vertex fallback coverage, sample count and sampling limits. Photo visibility also uses bounded source-cloud depth. Includes revisions 13–17. |
 | 17 | Unreleased | Optional linked photo/3D panes: `set_pane_linked`, per-scene `linked_photo_count` in `list_panes`, measured photo camera indicators and linked photo selection without moving the scene camera. Includes revisions 13–16. |
 | 16 | Unreleased | Native document panes and satellite windows: `list_panes`, `split_pane`, `tear_off_tab`, `dock_pane_window`. Screenshot capture follows the active document window. Includes revisions 13–15. |
