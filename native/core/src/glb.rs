@@ -10,7 +10,9 @@ pub(crate) fn write(
 ) -> Result<(), LoadError> {
     // Keep survey coordinates in the node transform so nearby vertices retain
     // their separation when consumers upload the local positions as floats.
-    let [ox, oy, oz] = mesh.vertices[0];
+    // Importers can store the node translation as f32. Put its rounding
+    // remainder in the local vertices so it survives that conversion.
+    let [ox, oy, oz] = mesh.vertices[0].map(|value| f64::from(value as f32));
     let local = |[x, y, z]: [f64; 3]| [(x - ox) as f32, (z - oz) as f32, (oy - y) as f32];
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
@@ -123,9 +125,9 @@ mod tests {
     fn survey_mesh_has_local_positions_and_aligned_gltf_attributes() {
         let mesh = MeshGeometry {
             vertices: vec![
-                [600000., 500000., 12.],
-                [600000.001, 500000., 12.],
-                [600000., 500001., 12.],
+                [600000.007, 500000.009, 12.],
+                [600000.008, 500000.009, 12.],
+                [600000.007, 500001.009, 12.],
             ],
             triangles: vec![[0, 1, 2]],
             colors: Some(vec![[128, 0, 255]; 3]),
@@ -151,8 +153,9 @@ mod tests {
         assert_eq!(word(end) as usize, glb.len() - end - 8);
         let base = end + 8;
         let float = |offset| f32::from_bits(word(base + offset));
-        assert!((float(12) - 0.001).abs() < 1e-8);
-        assert_eq!(float(32), -1.);
+        assert!((float(0) - 0.007).abs() < 1e-8);
+        assert!((float(12) - float(0) - 0.001).abs() < 1e-8);
+        assert!((float(32) + 1.009).abs() < 1e-7);
         assert_eq!(float(40), 1.);
         assert!((float(72) - 0.21586).abs() < 0.00001);
         assert_eq!(word(base + 116), 2);
