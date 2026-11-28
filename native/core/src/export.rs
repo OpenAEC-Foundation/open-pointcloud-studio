@@ -1679,7 +1679,18 @@ fn export_las_map_count(
         })
         .map(|_| las::Reader::from_path(&cloud.path).map(|reader| reader.header().clone()))
         .transpose()?;
-    let extended = cloud.total_points > u64::from(u32::MAX);
+    let extended = if let Some(header) = &source_header {
+        header.point_format().is_extended
+    } else if let Some(extended) = preview_extended_las_format(cloud) {
+        extended
+    } else {
+        let mut extended = false;
+        visit_points(&cloud.path, &mut |point| {
+            extended |= has_extended_class(&point);
+            Ok(())
+        })?;
+        extended
+    };
     let mut builder = if let Some(header) = &source_header {
         let mut builder = Builder::from(header.clone());
         builder.vlrs.retain(|vlr| {
@@ -2035,9 +2046,28 @@ pub(crate) fn ply_binary_point_bytes(cloud: &PointCloud) -> u64 {
         + u64::from(cloud.has_classification)
 }
 
-/// The length of one point record of a LAS or LAZ export of `cloud`, before
-/// compression: that of the source header for a LAS or LAZ source, which
-/// the export keeps, and else the point format `export_las_map_count` takes.
+fn has_extended_class(point: &Point) -> bool {
+    point.classification.is_some_and(|code| code > 31)
+}
+
+/// A bounded preview can prove that extended records are needed, but only a
+/// complete preview can rule them out for a classified source.
+fn preview_extended_las_format(cloud: &PointCloud) -> Option<bool> {
+    if cloud.total_points > u64::from(u32::MAX) {
+        return Some(true);
+    }
+    if !cloud.has_classification {
+        return Some(false);
+    }
+    if cloud.points.iter().any(has_extended_class) {
+        return Some(true);
+    }
+    (cloud.points.len() as u64 == cloud.total_points).then_some(false)
+}
+
+/// Upper bound on the size of an uncompressed LAS or LAZ point record.
+/// Preserve the source record length for LAS inputs. Budget for extended
+/// records when the preview cannot rule out eight-bit classification.
 pub(crate) fn las_point_bytes(cloud: &PointCloud) -> u64 {
     let source_is_las = cloud
         .path
@@ -2051,7 +2081,7 @@ pub(crate) fn las_point_bytes(cloud: &PointCloud) -> u64 {
             return u64::from(reader.header().point_format().len());
         }
     }
-    let extended = cloud.total_points > u64::from(u32::MAX);
+    let extended = preview_extended_las_format(cloud).unwrap_or(true);
     las::point::Format::new(match (extended, cloud.has_rgb) {
         (false, false) => 0,
         (false, true) => 2,
@@ -2150,6 +2180,33 @@ mod tests {
             })
             .unwrap();
             assert_eq!(count, 65_541);
+        }
+    }
+
+    #[test]
+    fn classified_csv_uses_the_full_stream_to_choose_las_format() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("classified.csv");
+        for (classes, extended) in [([1, 31, 2], false), ([32, 255, 1], true)] {
+            let mut csv = String::from("x,y,z,classification\n");
+            for (i, class) in classes.iter().enumerate() {
+                csv.push_str(&format!("{i},0,1,{class}\n"));
+            }
+            fs::write(&source, csv).unwrap();
+            let cloud = open(&source, 1).unwrap();
+            assert_eq!(preview_extended_las_format(&cloud), None);
+            for format in [ExportFormat::Las, ExportFormat::Laz] {
+                let output = directory.path().join(format!("out.{}", format.extension()));
+                export_full(&cloud, &output, format).unwrap();
+                let mut reader = las::Reader::from_path(output).unwrap();
+                assert_eq!(reader.header().point_format().is_extended, extended);
+                assert!(u64::from(reader.header().point_format().len()) <= las_point_bytes(&cloud));
+                let actual: Vec<u8> = reader
+                    .points()
+                    .map(|p| u8::from(p.unwrap().classification))
+                    .collect();
+                assert_eq!(actual, classes);
+            }
         }
     }
 
