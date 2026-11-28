@@ -472,11 +472,11 @@ jobs:
           # A Windows container with nothing installed: the application
           # starts there, reports its version and converts a file.
           $lines += @('', '### Clean Windows container', '')
-          $data = "$env:RUNNER_TEMP\data"
-          New-Item -ItemType Directory -Force $data | Out-Null
+          $data = Join-Path $env:RUNNER_TEMP ("grid-" + [guid]::NewGuid())
+          New-Item -ItemType Directory $data | Out-Null
           $ply = @('ply', 'format ascii 1.0', 'element vertex 8', 'property float x', 'property float y', 'property float z', 'end_header')
-          foreach ($x in 0, 1) { foreach ($y in 0, 1) { foreach ($z in 0, 1) { $ply += "$x $y $z" } } }
-          $ply | Set-Content -Encoding ascii "$data\grid.ply"
+          $corners = foreach ($x in 0, 1) { foreach ($y in 0, 1) { foreach ($z in 0, 1) { "$x $y $z" } } }
+          ($ply + $corners) | Set-Content -Encoding ascii "$data\grid.ply"
           # The full Windows Server image: Server Core lacks parts that every
           # Windows 10 and 11 desktop has and the application imports, such
           # as d3dcompiler_47.dll, so the program could not even start there.
@@ -494,10 +494,25 @@ jobs:
           } else {
             docker pull $base
             $version = docker run --rm -v "${app}:C:\app" -v "${data}:C:\data" $base C:\app\open-pointcloud-studio.exe --version
-            $exported = docker run --rm -v "${app}:C:\app" -v "${data}:C:\data" $base C:\app\open-pointcloud-studio.exe --export C:\data\grid.ply C:\data\grid.las
-            $lines += "- $base, nothing installed: ``--version`` gave ``$version``; ``--export`` gave ``$exported``"
-            if ("$version".Trim() -ne "open-pointcloud-studio $($env:NUMBER)") { $failures += "--version in a clean container gave '$version'" }
-            if (-not (Test-Path "$data\grid.las") -or (Get-Item "$data\grid.las").Length -eq 0) { $failures += '--export in a clean container wrote no file' }
+            if ($LASTEXITCODE -ne 0 -or "$version".Trim() -ne "open-pointcloud-studio $($env:NUMBER)") { $failures += "--version in a clean container gave '$version' (exit $LASTEXITCODE)" }
+            $lines += "- ``$base`` returned version ``$version``."
+            try {
+              $mounts = @('-v', "${app}:C:\app", '-v', "${data}:C:\data")
+              docker run --rm @mounts $base C:\app\open-pointcloud-studio.exe --export C:\data\grid.ply C:\data\grid.las
+              if ($LASTEXITCODE -ne 0) { throw "PLY to LAS exited with $LASTEXITCODE" }
+              docker run --rm @mounts $base C:\app\open-pointcloud-studio.exe --export C:\data\grid.las C:\data\roundtrip.xyz
+              if ($LASTEXITCODE -ne 0) { throw "LAS to XYZ exited with $LASTEXITCODE" }
+              $actual = Get-Content "$data\roundtrip.xyz" -ErrorAction Stop | ForEach-Object {
+                ($_.Trim() -split '\s+' | Select-Object -First 3 | ForEach-Object { [double]$_ }) -join ' '
+              }
+              if ((($actual | Sort-Object) -join ';') -cne ($corners -join ';')) {
+                throw "expected eight source corners, got [$($actual -join '; ')]"
+              }
+              $bytes = (Get-Item "$data\grid.las" -ErrorAction Stop).Length
+              $lines += "- Exported the eight PLY points to LAS ($bytes bytes) and read back all eight XYZ coordinates."
+            } catch {
+              $failures += "Clean Windows export: $_"
+            }
           }
           $lines | Add-Content $record
           if ($failures) {
