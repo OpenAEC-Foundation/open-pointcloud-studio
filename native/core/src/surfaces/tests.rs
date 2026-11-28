@@ -3165,9 +3165,33 @@ fn faces_of_a_room_with_a_column_export_as_dxf_dwg_and_ifc() {
     // An opening is an inner loop of its face.
     let windowed = detect(&windowed_room(), &SurfaceDetectConfig::default());
     let path = directory.path().join("windowed.ifc");
-    write_faces_ifc(&windowed, "room.e57", &path, &[]).unwrap();
+    write_faces_ifc(
+        &windowed,
+        "private/open-pointcloud-Hall #5 é%.e57",
+        &path,
+        &[],
+    )
+    .unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     let instances = check::read(&text).unwrap();
+    assert!(!text.contains("private"));
+    let entity = |name: &str| {
+        let mut matches = instances
+            .iter()
+            .filter(|(_, instance)| instance.name == name);
+        let instance = matches.next().expect(name);
+        assert!(matches.next().is_none(), "{name} should occur once");
+        instance
+    };
+    let (document, reference) = entity("IFCDOCUMENTREFERENCE");
+    assert_eq!(
+        reference.attributes[0],
+        "'./open-pointcloud-Hall%20%235%20%C3%A9%25.e57'"
+    );
+    let (project, _) = entity("IFCPROJECT");
+    let (_, association) = entity("IFCRELASSOCIATESDOCUMENT");
+    assert_eq!(association.attributes[4], format!("(#{project})"));
+    assert_eq!(association.attributes[5], format!("#{document}"));
     let holes = windowed
         .planes
         .iter()

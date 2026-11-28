@@ -1184,7 +1184,7 @@ fn write(
             if request.stale {
                 notes.push("The points of the scan changed after the faces were detected");
             }
-            write_faces_ifc(&request.surfaces, &name, path, &notes)?;
+            write_faces_ifc(&request.surfaces, &request.source, path, &notes)?;
         }
     }
     Ok(ExportDone {

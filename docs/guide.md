@@ -956,6 +956,8 @@ The DXF and DWG files are in version R2013 with metres as their unit. They hold:
 
 Every entity of the detected faces takes its colour from its layer, so a layer can be recoloured, frozen or switched off at once. The vertices of a polyface mesh can be moved and the mesh can be exploded into 3D faces. The files hold no ACIS solids (`3DSOLID`) or NURBS surfaces: a CAD program that can turn a mesh into a surface or a solid does that from these meshes.
 
+To share the faces with their source points, put the exported IFC and the original anchor scan in the same folder. Keep the scan’s filename when moving or sending the pair. The IFC project links to that filename and stores the detected geometry separately.
+
 The IFC file is IFC4, written as a STEP file. It holds a project with one site, one building and one storey named *Scan*, and every face as an `IfcBuildingElementProxy` in that storey with the object type `Plane (floor)`, `Plane (ceiling)`, `Plane (wall)`, `Plane (sloped)` or `Cylinder`. The type of a face follows from its direction alone, so a table top is a floor; for that reason no face is written as a wall, slab or column. The geometry:
 
 - A flat face is an `IfcPolygonalFaceSet` with one face per connected part, its openings as inner loops.
@@ -965,6 +967,18 @@ The IFC file is IFC4, written as a STEP file. It holds a project with one site, 
 Coordinates far from zero: on an axis where the faces or the mesh lie more than 1,000 m from zero, as in RD New, the site is placed at the middle of the geometry rounded to whole metres, and all geometry is relative to that point. The placement of the site carries the offset, so the elements stand at their scene coordinates, and the description of the site names the point. Close to zero nothing is moved. The coordinate system of the scan is not known to the application, so the file holds no map conversion; a BIM program that needs one gets it from the user.
 
 The files were checked with the reader of the codec that writes the DXF and DWG files, and the IFC file with a check of its STEP structure and with an open-source IFC library; not yet with a range of CAD and BIM programs. If a program refuses a DWG file, try DXF.
+
+#### Deliver reviewed faces as IFC walls and slabs
+
+Open the exported IFC beside the scan and check which numbered faces represent building elements. From a Studio source checkout, use the [classification tool](../native/tools/classify-ifc-faces.py) with Python and IfcOpenShell. Run the tool with the exported IFC to list its planar face numbers, names and GlobalIds. Then pass the numbers you reviewed to `--wall` or `--slab`.
+
+```sh
+python -m pip install ifcopenshell
+python native/tools/classify-ifc-faces.py faces.ifc
+python native/tools/classify-ifc-faces.py faces.ifc --output reviewed.ifc --wall 4 5 --slab 2
+```
+
+The example assigns faces 4 and 5 to `IfcWall` and face 2 to `IfcSlab`. It writes a sibling IFC so the relative link to the scan still resolves. The selected elements keep their GlobalIds, measured surfaces and scan properties. A class assignment describes what the surface belongs to. Wall thickness and slab depth require separate measurements.
 
 #### The JSON file
 
