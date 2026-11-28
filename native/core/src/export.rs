@@ -779,9 +779,28 @@ fn export_e57_map_count(
             writer.register_extension(extension)?;
         }
     }
-    let mut source_count = 0u64;
-    let mut written_count = 0u64;
+    let written_count = if let Some((scale, translation)) =
+        image_transform.filter(|_| crate::scene_export::has_scan_blocks(&cloud.path))
     {
+        let source = crate::scene_export::SceneSource {
+            cloud,
+            transform: crate::scene_transform::SceneTransform {
+                scale,
+                translation,
+                ..Default::default()
+            },
+        };
+        crate::scene_export::write_scan_blocks(
+            &mut writer,
+            &source,
+            prototype,
+            &scan_guid,
+            &mut map,
+            &mut |_| Ok(()),
+        )?
+    } else {
+        let mut source_count = 0u64;
+        let mut written_count = 0u64;
         let mut scan = writer.add_pointcloud(&scan_guid, prototype)?;
         scan.set_name(Some("Open Pointcloud Studio export".into()));
         visit_points(&cloud.path, &mut |point| {
@@ -819,14 +838,15 @@ fn export_e57_map_count(
                 cloud.total_points
             )));
         }
-        if let Some(expected_count) = expected_count {
-            if written_count != expected_count {
-                return Err(LoadError::InvalidData(format!(
-                    "selection changed during export (expected {expected_count} points, wrote {written_count})"
-                )));
-            }
-        }
         scan.finalize()?;
+        written_count
+    };
+    if let Some(expected_count) = expected_count {
+        if written_count != expected_count {
+            return Err(LoadError::InvalidData(format!(
+                "selection changed during export (expected {expected_count} points, wrote {written_count})"
+            )));
+        }
     }
     if let Some((scale, translation)) = image_transform.filter(|_| crate::is_e57(&cloud.path)) {
         let mut reader = super::e57_points::open_reader(&cloud.path)?;
@@ -2112,6 +2132,44 @@ fn write_ply_binary(
 mod tests {
     use super::*;
     use crate::{open, Bounds};
+
+    #[test]
+    fn edited_ptx_export_keeps_station_frames_and_filtered_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stations.ptx");
+        fs::write(&path, crate::ptx::tests::THREE_BLOCKS).unwrap();
+        let mut cloud = open(&path, 100).unwrap();
+        cloud.has_rgb = true;
+        let out = dir.path().join("edited.e57");
+        let offset = [100., 200., 300.];
+        let map = |ordinal: u64, mut point: Point| {
+            point.xyz = std::array::from_fn(|axis| point.xyz[axis] * 2. + offset[axis]);
+            point.rgb = Some([12, 34, 56]);
+            (ordinal >= 3).then_some(point)
+        };
+        export_e57_map_with_images(&cloud, &out, Some(3), 2., offset, map).unwrap();
+        let scans = crate::e57_points::open_reader(&out).unwrap().pointclouds();
+        assert_eq!(
+            scans.iter().map(|s| s.records).collect::<Vec<_>>(),
+            [0, 2, 1]
+        );
+        assert!(scans[1].transform.is_none());
+        let reopened = open(&out, 100).unwrap();
+        assert_eq!(reopened.scan_poses.len(), 2);
+        assert_eq!(reopened.scan_poses[0].position, [120., 240., 360.]);
+        assert_eq!(reopened.scan_poses[1].position, [180., 300., 420.]);
+        for (point, original) in reopened.points.iter().zip(&cloud.points[3..]) {
+            assert_eq!(
+                point.xyz,
+                std::array::from_fn(|axis| 2. * original.xyz[axis] + offset[axis])
+            );
+            assert_eq!(point.rgb, Some([12, 34, 56]));
+            assert_eq!(point.intensity, original.intensity);
+        }
+        let saved = fs::read(&out).unwrap();
+        assert!(export_e57_map_with_images(&cloud, &out, Some(4), 2., offset, map).is_err());
+        assert_eq!(fs::read(&out).unwrap(), saved);
+    }
 
     #[test]
     fn parallel_point_export_keeps_order_and_exact_count_across_batches() {

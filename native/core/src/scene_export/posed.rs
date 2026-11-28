@@ -48,12 +48,12 @@ fn produce(path: &Path, sender: SyncSender<Event>) -> Result<(), LoadError> {
     flush()
 }
 
-pub(super) fn write(
+pub(crate) fn write(
     writer: &mut E57Writer<File>,
     source: &SceneSource<'_>,
     prototype: Vec<Record>,
     first_guid: &str,
-    include: &mut impl FnMut(u64, &Point) -> bool,
+    map: &mut impl FnMut(u64, Point) -> Option<Point>,
     progress: &mut impl FnMut(u64) -> Result<(), LoadError>,
 ) -> Result<u64, LoadError> {
     std::thread::scope(|scope| {
@@ -116,7 +116,14 @@ pub(super) fn write(
                         }
                         Some(Event::Points(points)) => {
                             for point in points {
-                                if include(ordinal, &point) {
+                                if let Some(mapped) = map(ordinal, point) {
+                                    if !mapped.xyz.iter().all(|v| v.is_finite()) {
+                                        return Err(LoadError::InvalidData(
+                                            "transform produced non-finite coordinates".into(),
+                                        ));
+                                    }
+                                    // Derive local coordinates from the original world point.
+                                    // The output pose carries the shared scene transform.
                                     let xyz = if let Some(station) = station {
                                         std::array::from_fn(|i| {
                                             (0..3)
@@ -130,7 +137,7 @@ pub(super) fn write(
                                     } else {
                                         source.transform.xyz(point.xyz)
                                     };
-                                    output.add_point(point_values(source.cloud, point, xyz))?;
+                                    output.add_point(point_values(source.cloud, mapped, xyz))?;
                                     written += 1;
                                 }
                                 ordinal += 1;
